@@ -9,7 +9,15 @@ from tests.factories.academics_factory import (
     TermFactory,
     WeeklyTopicFactory,
 )
-from tests.factories.assessments_factory import PDFResourceFactory, ResourceFactory
+from tests.factories.assessments_factory import (
+    OpenQuizFactory,
+    PDFResourceFactory,
+    QuestionChoiceFactory,
+    QuestionFactory,
+    QuizAttemptFactory,
+    QuizFactory,
+    ResourceFactory,
+)
 from tests.factories.enrollment_factory import EnrollmentFactory, StudentProfileFactory
 from tests.factories.user_factory import RoleFactory, UserFactory, UserRoleFactory
 
@@ -30,4 +38,9 @@ __all__ = [
     'EnrollmentFactory',
     'ResourceFactory',
     'PDFResourceFactory',
+    'QuizFactory',
+    'OpenQuizFactory',
+    'QuestionFactory',
+    'QuestionChoiceFactory',
+    'QuizAttemptFactory',
 ]
