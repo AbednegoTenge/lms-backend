@@ -1,6 +1,13 @@
 from rest_framework import serializers
 
-from apps.assessments.models import Resource
+from apps.assessments.models import (
+    Question,
+    QuestionChoice,
+    Quiz,
+    QuizAnswer,
+    QuizAttempt,
+    Resource,
+)
 
 
 class ResourceSerializer(serializers.ModelSerializer):
@@ -37,3 +44,119 @@ class ResourceSerializer(serializers.ModelSerializer):
                 )
 
         return attrs
+
+
+# ---------------------------------------------------------------------------
+# Quiz serializers
+# ---------------------------------------------------------------------------
+
+class QuestionChoiceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = QuestionChoice
+        fields = ['id', 'text', 'is_correct']
+        read_only_fields = ['id']
+
+
+class QuestionSerializer(serializers.ModelSerializer):
+    choices = QuestionChoiceSerializer(many=True)
+
+    class Meta:
+        model = Question
+        fields = ['id', 'question_text', 'question_type', 'marks', 'order', 'choices']
+        read_only_fields = ['id']
+
+    def validate_choices(self, value):
+        return value
+
+
+class QuizSerializer(serializers.ModelSerializer):
+    questions = QuestionSerializer(many=True)
+    assignment_id = serializers.UUIDField(source='assignment.id', read_only=True)
+
+    class Meta:
+        model = Quiz
+        fields = [
+            'id', 'assignment_id', 'title', 'instructions',
+            'max_attempts', 'due_datetime', 'status', 'total_marks',
+            'questions', 'created_at', 'updated_at',
+        ]
+        read_only_fields = ['id', 'assignment_id', 'status', 'created_at', 'updated_at']
+
+    def create(self, validated_data):
+        questions_data = validated_data.pop('questions')
+        quiz = Quiz.objects.create(**validated_data)
+        for q_data in questions_data:
+            choices_data = q_data.pop('choices', [])
+            question = Question.objects.create(quiz=quiz, **q_data)
+            for c_data in choices_data:
+                QuestionChoice.objects.create(question=question, **c_data)
+        return quiz
+
+    def update(self, instance, validated_data):
+        questions_data = validated_data.pop('questions', None)
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+
+        if questions_data is not None:
+            instance.questions.all().delete()
+            for q_data in questions_data:
+                choices_data = q_data.pop('choices', [])
+                question = Question.objects.create(quiz=instance, **q_data)
+                for c_data in choices_data:
+                    QuestionChoice.objects.create(question=question, **c_data)
+        return instance
+
+
+class QuizListSerializer(serializers.ModelSerializer):
+    """Lightweight serializer for list endpoint — omits nested questions."""
+    assignment_id = serializers.UUIDField(source='assignment.id', read_only=True)
+
+    class Meta:
+        model = Quiz
+        fields = [
+            'id', 'assignment_id', 'title', 'max_attempts',
+            'due_datetime', 'status', 'total_marks', 'created_at',
+        ]
+        read_only_fields = fields
+
+
+# ---------------------------------------------------------------------------
+# Quiz attempt / submission serializers
+# ---------------------------------------------------------------------------
+
+class QuizAnswerWriteSerializer(serializers.Serializer):
+    question_id = serializers.UUIDField()
+    selected_choice_ids = serializers.ListField(
+        child=serializers.UUIDField(), required=False, allow_empty=True
+    )
+    text_answer = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+
+
+class QuizSubmitSerializer(serializers.Serializer):
+    answers = QuizAnswerWriteSerializer(many=True)
+
+
+class QuizAnswerReadSerializer(serializers.ModelSerializer):
+    question_id = serializers.UUIDField(source='question.id', read_only=True)
+    selected_choice_ids = serializers.SerializerMethodField()
+
+    class Meta:
+        model = QuizAnswer
+        fields = ['id', 'question_id', 'selected_choice_ids', 'text_answer']
+
+    def get_selected_choice_ids(self, obj):
+        return list(obj.selected_choices.values_list('id', flat=True))
+
+
+class QuizAttemptSerializer(serializers.ModelSerializer):
+    answers = QuizAnswerReadSerializer(many=True, read_only=True)
+    student_school_id = serializers.CharField(source='student.school_id', read_only=True)
+
+    class Meta:
+        model = QuizAttempt
+        fields = [
+            'id', 'quiz', 'student_school_id', 'attempt_number',
+            'started_at', 'submitted_at', 'score', 'status', 'answers',
+        ]
+        read_only_fields = fields
