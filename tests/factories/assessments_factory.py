@@ -3,7 +3,16 @@ import datetime
 import factory
 from factory.django import DjangoModelFactory
 
-from apps.assessments.models import Question, QuestionChoice, Quiz, QuizAttempt, Resource
+from apps.assessments.models import (
+    Assignment,
+    AssignmentSubmission,
+    Question,
+    QuestionChoice,
+    Quiz,
+    QuizAttempt,
+    Resource,
+    TeacherEvaluation,
+)
 
 
 class ResourceFactory(DjangoModelFactory):
@@ -79,3 +88,52 @@ class QuizAttemptFactory(DjangoModelFactory):
     student = factory.SubFactory('tests.factories.user_factory.UserFactory', role='STUDENT')
     attempt_number = 1
     status = QuizAttempt.IN_PROGRESS
+
+
+# ---------------------------------------------------------------------------
+# Assignment factories
+# ---------------------------------------------------------------------------
+
+class AssignmentFactory(DjangoModelFactory):
+    class Meta:
+        model = Assignment
+
+    assignment = factory.SubFactory(
+        'tests.factories.academics_factory.TeacherCourseAssignmentFactory'
+    )
+    title = factory.Sequence(lambda n: f'Assignment {n}')
+    description = factory.Faker('paragraph')
+    due_datetime = factory.LazyFunction(
+        lambda: datetime.datetime(2099, 12, 31, 23, 59, 59,
+                                  tzinfo=datetime.timezone.utc)
+    )
+    submission_type = Assignment.BOTH
+    max_marks = factory.LazyFunction(lambda: 100)
+    status = Assignment.DRAFT
+
+
+class OpenAssignmentFactory(AssignmentFactory):
+    status = Assignment.OPEN
+
+
+class AssignmentSubmissionFactory(DjangoModelFactory):
+    class Meta:
+        model = AssignmentSubmission
+
+    assignment = factory.SubFactory(OpenAssignmentFactory)
+    student = factory.SubFactory('tests.factories.user_factory.UserFactory', role='STUDENT')
+    text_content = factory.Faker('paragraph')
+    file = None
+    status = AssignmentSubmission.SUBMITTED
+
+
+class TeacherEvaluationFactory(DjangoModelFactory):
+    class Meta:
+        model = TeacherEvaluation
+
+    student = factory.SubFactory('tests.factories.user_factory.UserFactory', role='STUDENT')
+    teacher = factory.SubFactory('tests.factories.user_factory.UserFactory', role='TEACHER')
+    course = factory.SubFactory('tests.factories.academics_factory.CourseFactory')
+    term = factory.SubFactory('tests.factories.academics_factory.TermFactory')
+    rating = 4
+    comment = factory.Faker('sentence')

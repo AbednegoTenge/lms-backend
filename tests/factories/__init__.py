@@ -10,6 +10,9 @@ from tests.factories.academics_factory import (
     WeeklyTopicFactory,
 )
 from tests.factories.assessments_factory import (
+    AssignmentFactory,
+    AssignmentSubmissionFactory,
+    OpenAssignmentFactory,
     OpenQuizFactory,
     PDFResourceFactory,
     QuestionChoiceFactory,
@@ -17,6 +20,7 @@ from tests.factories.assessments_factory import (
     QuizAttemptFactory,
     QuizFactory,
     ResourceFactory,
+    TeacherEvaluationFactory,
 )
 from tests.factories.enrollment_factory import EnrollmentFactory, StudentProfileFactory
 from tests.factories.user_factory import RoleFactory, UserFactory, UserRoleFactory
@@ -43,4 +47,8 @@ __all__ = [
     'QuestionFactory',
     'QuestionChoiceFactory',
     'QuizAttemptFactory',
+    'AssignmentFactory',
+    'OpenAssignmentFactory',
+    'AssignmentSubmissionFactory',
+    'TeacherEvaluationFactory',
 ]
