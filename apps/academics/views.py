@@ -2,8 +2,10 @@ from django.core.cache import cache
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters, status, viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import ImproperlyConfigured
 from rest_framework.permissions import IsAuthenticated, SAFE_METHODS
 from rest_framework.response import Response
+from rest_framework.throttling import UserRateThrottle
 
 from apps.academics.models import (
     AcademicYear,
@@ -24,6 +26,16 @@ from apps.academics.serializers import (
     TermSerializer,
 )
 from apps.users.permissions import IsAdminOrSuperAdmin
+
+
+class TransitionThrottle(UserRateThrottle):
+    scope = 'transition'
+
+    def get_rate(self):
+        try:
+            return super().get_rate()
+        except ImproperlyConfigured:
+            return None
 
 
 # ---------------------------------------------------------------------------
@@ -144,6 +156,21 @@ class TermViewSet(AdminWriteAuthReadMixin, viewsets.ModelViewSet):
         self.get_object().delete()
         return Response({'success': True, 'message': 'Term deleted.', 'data': {}},
                         status=status.HTTP_204_NO_CONTENT)
+
+    @action(
+        detail=False,
+        methods=['post'],
+        url_path='transition',
+        permission_classes=[IsAdminOrSuperAdmin],
+        throttle_classes=[TransitionThrottle],
+    )
+    def transition(self, request):
+        from apps.academics.services import TermTransitionService, TransitionError
+        try:
+            result = TermTransitionService.transition()
+        except TransitionError as exc:
+            return _err(str(exc), status_code=status.HTTP_400_BAD_REQUEST)
+        return _ok(result, 'Term transitioned successfully.')
 
 
 # ---------------------------------------------------------------------------
