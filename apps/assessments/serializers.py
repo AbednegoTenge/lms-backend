@@ -1,12 +1,15 @@
 from rest_framework import serializers
 
 from apps.assessments.models import (
+    Assignment,
+    AssignmentSubmission,
     Question,
     QuestionChoice,
     Quiz,
     QuizAnswer,
     QuizAttempt,
     Resource,
+    TeacherEvaluation,
 )
 
 
@@ -160,3 +163,94 @@ class QuizAttemptSerializer(serializers.ModelSerializer):
             'started_at', 'submitted_at', 'score', 'status', 'answers',
         ]
         read_only_fields = fields
+
+
+# ---------------------------------------------------------------------------
+# Assignment serializers
+# ---------------------------------------------------------------------------
+
+class AssignmentSerializer(serializers.ModelSerializer):
+    assignment_id = serializers.UUIDField(source='assignment.id', read_only=True)
+    course_name = serializers.CharField(source='assignment.course.name', read_only=True)
+
+    class Meta:
+        model = Assignment
+        fields = [
+            'id', 'assignment_id', 'course_name', 'title', 'description',
+            'due_datetime', 'submission_type', 'max_marks', 'status', 'created_at',
+        ]
+        read_only_fields = ['id', 'assignment_id', 'course_name', 'status', 'created_at']
+
+
+class AssignmentListSerializer(serializers.ModelSerializer):
+    assignment_id = serializers.UUIDField(source='assignment.id', read_only=True)
+    course_name = serializers.CharField(source='assignment.course.name', read_only=True)
+
+    class Meta:
+        model = Assignment
+        fields = [
+            'id', 'assignment_id', 'course_name', 'title',
+            'due_datetime', 'submission_type', 'max_marks', 'status', 'created_at',
+        ]
+        read_only_fields = ['id', 'assignment_id', 'course_name', 'status', 'created_at']
+
+
+class AssignmentSubmissionSerializer(serializers.ModelSerializer):
+    student_school_id = serializers.CharField(source='student.school_id', read_only=True)
+    graded_by_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = AssignmentSubmission
+        fields = [
+            'id', 'assignment', 'student_school_id', 'submitted_at',
+            'text_content', 'file', 'marks_obtained', 'feedback',
+            'graded_by_name', 'graded_at', 'status',
+        ]
+        read_only_fields = [
+            'id', 'assignment', 'student_school_id', 'submitted_at',
+            'marks_obtained', 'feedback', 'graded_by_name', 'graded_at', 'status',
+        ]
+        extra_kwargs = {
+            'file': {'write_only': True, 'required': False},
+            'text_content': {'required': False},
+        }
+
+    def get_graded_by_name(self, obj):
+        if obj.graded_by:
+            return obj.graded_by.get_full_name()
+        return None
+
+
+class GradeSubmissionSerializer(serializers.Serializer):
+    marks_obtained = serializers.DecimalField(max_digits=6, decimal_places=2)
+    feedback = serializers.CharField(required=False, allow_blank=True)
+
+    def validate_marks_obtained(self, value):
+        if value < 0:
+            raise serializers.ValidationError('marks_obtained cannot be negative.')
+        return value
+
+
+# ---------------------------------------------------------------------------
+# Teacher Evaluation serializers
+# ---------------------------------------------------------------------------
+
+class TeacherEvaluationSerializer(serializers.ModelSerializer):
+    student_school_id = serializers.CharField(source='student.school_id', read_only=True)
+    teacher_school_id = serializers.CharField(source='teacher.school_id', read_only=True)
+    course_code = serializers.CharField(source='course.code', read_only=True)
+
+    class Meta:
+        model = TeacherEvaluation
+        fields = [
+            'id', 'student_school_id', 'teacher', 'teacher_school_id',
+            'course', 'course_code', 'term', 'rating', 'comment', 'submitted_at',
+        ]
+        read_only_fields = [
+            'id', 'student_school_id', 'teacher_school_id', 'course_code', 'submitted_at',
+        ]
+
+    def validate_rating(self, value):
+        if not (1 <= value <= 5):
+            raise serializers.ValidationError('rating must be between 1 and 5.')
+        return value

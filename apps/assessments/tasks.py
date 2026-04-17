@@ -12,3 +12,15 @@ def close_expired_quizzes():
         due_datetime__lte=timezone.now(),
     ).update(status=Quiz.CLOSED)
     return updated
+
+
+@shared_task
+def close_expired_assignments():
+    """Mark all OPEN assignments whose due_datetime has passed as CLOSED."""
+    from apps.assessments.models import Assignment
+
+    updated = Assignment.objects.filter(
+        status=Assignment.OPEN,
+        due_datetime__lte=timezone.now(),
+    ).update(status=Assignment.CLOSED)
+    return updated

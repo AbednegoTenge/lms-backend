@@ -12,19 +12,27 @@ from rest_framework.response import Response
 from rest_framework.throttling import UserRateThrottle
 from apps.academics.models import TeacherCourseAssignment
 from apps.assessments.models import (
+    Assignment,
+    AssignmentSubmission,
     Question,
     QuestionChoice,
     Quiz,
     QuizAnswer,
     QuizAttempt,
     Resource,
+    TeacherEvaluation,
 )
 from apps.assessments.serializers import (
+    AssignmentListSerializer,
+    AssignmentSerializer,
+    AssignmentSubmissionSerializer,
+    GradeSubmissionSerializer,
     QuizAttemptSerializer,
     QuizListSerializer,
     QuizSerializer,
     QuizSubmitSerializer,
     ResourceSerializer,
+    TeacherEvaluationSerializer,
 )
 from apps.assessments.services import validate_resource_file
 from apps.enrollment.models import Enrollment
@@ -511,3 +519,386 @@ class QuizAttemptViewSet(viewsets.GenericViewSet):
 
         attempt.refresh_from_db()
         return _ok(QuizAttemptSerializer(attempt).data, 'Attempt submitted.')
+
+
+# ---------------------------------------------------------------------------
+# Assignment helpers
+# ---------------------------------------------------------------------------
+
+def _can_manage_assignment(user, course_assignment):
+    """Teacher owns assignment, or Super Admin."""
+    if user.has_role('SUPER_ADMIN'):
+        return True
+    return user.has_role('TEACHER') and course_assignment.teacher_id == user.pk
+
+
+def _can_view_assignment(user, course_assignment):
+    """Admin/SuperAdmin/Principal always; teacher if own; student if enrolled."""
+    if user.has_any_role(['ADMIN', 'SUPER_ADMIN', 'PRINCIPAL']):
+        return True
+    if user.has_role('TEACHER') and course_assignment.teacher_id == user.pk:
+        return True
+    if user.has_role('STUDENT'):
+        return _is_enrolled(user, course_assignment)
+    return False
+
+
+def _get_course_assignment(pk):
+    try:
+        return (
+            TeacherCourseAssignment.objects
+            .select_related('teacher', 'course', 'term', 'level')
+            .get(pk=pk)
+        )
+    except TeacherCourseAssignment.DoesNotExist:
+        raise NotFound('Assignment not found.')
+
+
+# ---------------------------------------------------------------------------
+# CourseAssignmentViewSet
+# ---------------------------------------------------------------------------
+
+class CourseAssignmentViewSet(viewsets.GenericViewSet):
+    """
+    GET    /api/v1/course-assignments/                list
+    POST   /api/v1/course-assignments/                create
+    GET    /api/v1/course-assignments/{id}/           retrieve
+    PATCH  /api/v1/course-assignments/{id}/           update (DRAFT only)
+    POST   /api/v1/course-assignments/{id}/publish/   publish
+    POST   /api/v1/course-assignments/{id}/submit/    student submits
+    GET    /api/v1/course-assignments/{id}/submissions/ list submissions
+    """
+    permission_classes = [IsAuthenticated]
+    serializer_class = AssignmentSerializer
+
+    def _get_assignment(self, pk):
+        try:
+            return (
+                Assignment.objects
+                .select_related(
+                    'assignment__teacher', 'assignment__course',
+                    'assignment__term', 'assignment__level',
+                )
+                .get(pk=pk)
+            )
+        except Assignment.DoesNotExist:
+            raise NotFound('Course assignment not found.')
+
+    # ------------------------------------------------------------------
+    # List
+    # ------------------------------------------------------------------
+    def list(self, request):
+        user = request.user
+        if user.has_any_role(['ADMIN', 'SUPER_ADMIN', 'PRINCIPAL']):
+            qs = Assignment.objects.select_related(
+                'assignment__teacher', 'assignment__course',
+                'assignment__term', 'assignment__level',
+            )
+        elif user.has_role('TEACHER'):
+            qs = Assignment.objects.filter(
+                assignment__teacher=user,
+            ).select_related(
+                'assignment__teacher', 'assignment__course',
+                'assignment__term', 'assignment__level',
+            )
+        elif user.has_role('STUDENT'):
+            enrolled_course_ids = Enrollment.objects.filter(
+                student=user, is_active=True,
+            ).values_list('course_id', flat=True)
+            qs = Assignment.objects.filter(
+                assignment__course_id__in=enrolled_course_ids,
+                status=Assignment.OPEN,
+            ).select_related(
+                'assignment__teacher', 'assignment__course',
+                'assignment__term', 'assignment__level',
+            )
+        else:
+            return _forbidden()
+
+        course = request.query_params.get('course')
+        if course:
+            qs = qs.filter(assignment__course_id=course)
+        status_filter = request.query_params.get('status')
+        if status_filter:
+            qs = qs.filter(status=status_filter)
+
+        return _ok(AssignmentListSerializer(qs, many=True).data)
+
+    # ------------------------------------------------------------------
+    # Create
+    # ------------------------------------------------------------------
+    def create(self, request):
+        user = request.user
+        course_assignment_id = request.data.get('assignment')
+        if not course_assignment_id:
+            return _err('assignment is required.')
+        try:
+            course_assignment = (
+                TeacherCourseAssignment.objects
+                .select_related('teacher', 'course', 'term', 'level')
+                .get(pk=course_assignment_id)
+            )
+        except TeacherCourseAssignment.DoesNotExist:
+            return _err('Assignment not found.', status_code=status.HTTP_404_NOT_FOUND)
+
+        if not _can_manage_assignment(user, course_assignment):
+            return _forbidden()
+
+        serializer = AssignmentSerializer(data=request.data)
+        if not serializer.is_valid():
+            return _err('Validation error.', serializer.errors)
+
+        obj = serializer.save(assignment=course_assignment)
+        return _ok(
+            AssignmentSerializer(obj).data, 'Assignment created.', status.HTTP_201_CREATED
+        )
+
+    # ------------------------------------------------------------------
+    # Retrieve
+    # ------------------------------------------------------------------
+    def retrieve(self, request, pk=None):
+        obj = self._get_assignment(pk)
+        if not _can_view_assignment(request.user, obj.assignment):
+            return _forbidden()
+        return _ok(AssignmentSerializer(obj).data)
+
+    # ------------------------------------------------------------------
+    # Partial update (DRAFT only)
+    # ------------------------------------------------------------------
+    def partial_update(self, request, pk=None):
+        obj = self._get_assignment(pk)
+        if not _can_manage_assignment(request.user, obj.assignment):
+            return _forbidden()
+        if obj.status != Assignment.DRAFT:
+            return _err(
+                'Only DRAFT assignments can be edited.',
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            )
+        serializer = AssignmentSerializer(obj, data=request.data, partial=True)
+        if not serializer.is_valid():
+            return _err('Validation error.', serializer.errors)
+        serializer.save()
+        return _ok(serializer.data, 'Assignment updated.')
+
+    # ------------------------------------------------------------------
+    # Publish
+    # ------------------------------------------------------------------
+    @action(detail=True, methods=['post'], url_path='publish')
+    def publish(self, request, pk=None):
+        obj = self._get_assignment(pk)
+        if not _can_manage_assignment(request.user, obj.assignment):
+            return _forbidden()
+        if obj.status != Assignment.DRAFT:
+            return _err(
+                'Only DRAFT assignments can be published.',
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            )
+        obj.status = Assignment.OPEN
+        obj.save(update_fields=['status'])
+        return _ok(AssignmentSerializer(obj).data, 'Assignment published.')
+
+    # ------------------------------------------------------------------
+    # Submit (student)
+    # ------------------------------------------------------------------
+    @action(
+        detail=True,
+        methods=['post'],
+        url_path='submit',
+        parser_classes=[MultiPartParser, FormParser],
+        throttle_classes=[UploadThrottle],
+    )
+    def submit(self, request, pk=None):
+        obj = self._get_assignment(pk)
+        user = request.user
+
+        if not user.has_role('STUDENT'):
+            return _forbidden('Only students can submit assignments.')
+        if not _is_enrolled(user, obj.assignment):
+            return _forbidden('Not enrolled in this course.')
+        if obj.status != Assignment.OPEN:
+            return _err(
+                'Assignment is not open for submissions.',
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            )
+
+        # Check duplicate submission
+        if AssignmentSubmission.objects.filter(assignment=obj, student=user).exists():
+            return _err(
+                'You have already submitted this assignment.',
+                status_code=status.HTTP_409_CONFLICT,
+            )
+
+        # Validate submission content per submission_type
+        text_content = request.data.get('text_content')
+        file = request.FILES.get('file')
+
+        if obj.submission_type == Assignment.TEXT and not text_content:
+            return _err('text_content is required for TEXT submissions.')
+        if obj.submission_type == Assignment.DOCUMENT and not file:
+            return _err('file is required for DOCUMENT submissions.')
+        if obj.submission_type == Assignment.BOTH and not text_content and not file:
+            return _err('Provide text_content, file, or both.')
+
+        # Determine late status
+        is_late = timezone.now() > obj.due_datetime
+        sub_status = AssignmentSubmission.LATE if is_late else AssignmentSubmission.SUBMITTED
+
+        # File validation
+        if file:
+            try:
+                from apps.assessments.services import validate_resource_file
+                validate_resource_file(file, 'OTHER')
+            except DjangoValidationError as exc:
+                return _err(exc.message)
+
+        submission = AssignmentSubmission.objects.create(
+            assignment=obj,
+            student=user,
+            text_content=text_content or None,
+            file=file or None,
+            status=sub_status,
+        )
+        return _ok(
+            AssignmentSubmissionSerializer(submission).data,
+            'Assignment submitted.',
+            status.HTTP_201_CREATED,
+        )
+
+    # ------------------------------------------------------------------
+    # Submissions list
+    # ------------------------------------------------------------------
+    @action(detail=True, methods=['get'], url_path='submissions')
+    def submissions(self, request, pk=None):
+        obj = self._get_assignment(pk)
+        user = request.user
+        if not (user.has_any_role(['ADMIN', 'SUPER_ADMIN', 'PRINCIPAL']) or
+                (user.has_role('TEACHER') and obj.assignment.teacher_id == user.pk)):
+            return _forbidden()
+
+        subs = (
+            AssignmentSubmission.objects
+            .filter(assignment=obj)
+            .select_related('student', 'graded_by')
+        )
+        return _ok(AssignmentSubmissionSerializer(subs, many=True).data)
+
+
+# ---------------------------------------------------------------------------
+# AssignmentSubmissionViewSet  (grade endpoint)
+# ---------------------------------------------------------------------------
+
+class AssignmentSubmissionViewSet(viewsets.GenericViewSet):
+    """
+    PATCH /api/v1/assignment-submissions/{id}/grade/
+    """
+    permission_classes = [IsAuthenticated]
+
+    def _get_submission(self, pk):
+        try:
+            return (
+                AssignmentSubmission.objects
+                .select_related(
+                    'assignment__assignment__teacher',
+                    'assignment__assignment__course',
+                    'student',
+                )
+                .get(pk=pk)
+            )
+        except AssignmentSubmission.DoesNotExist:
+            raise NotFound('Submission not found.')
+
+    @action(detail=True, methods=['patch'], url_path='grade')
+    def grade(self, request, pk=None):
+        submission = self._get_submission(pk)
+        course_assignment = submission.assignment.assignment
+        user = request.user
+
+        if not (user.has_role('SUPER_ADMIN') or
+                (user.has_role('TEACHER') and course_assignment.teacher_id == user.pk)):
+            return _forbidden()
+
+        serializer = GradeSubmissionSerializer(data=request.data)
+        if not serializer.is_valid():
+            return _err('Validation error.', serializer.errors)
+
+        marks = serializer.validated_data['marks_obtained']
+        if marks > submission.assignment.max_marks:
+            return _err(
+                f'marks_obtained cannot exceed max_marks ({submission.assignment.max_marks}).'
+            )
+
+        submission.marks_obtained = marks
+        submission.feedback = serializer.validated_data.get('feedback', '')
+        submission.graded_by = user
+        submission.graded_at = timezone.now()
+        submission.status = AssignmentSubmission.GRADED
+        submission.save(update_fields=[
+            'marks_obtained', 'feedback', 'graded_by', 'graded_at', 'status'
+        ])
+        return _ok(AssignmentSubmissionSerializer(submission).data, 'Submission graded.')
+
+
+# ---------------------------------------------------------------------------
+# TeacherEvaluationViewSet
+# ---------------------------------------------------------------------------
+
+class TeacherEvaluationViewSet(viewsets.GenericViewSet):
+    """
+    POST /api/v1/evaluations/   student submits evaluation
+    GET  /api/v1/evaluations/   admin/principal see all; teacher sees own received
+    """
+    permission_classes = [IsAuthenticated]
+
+    def list(self, request):
+        user = request.user
+        if user.has_any_role(['ADMIN', 'SUPER_ADMIN', 'PRINCIPAL']):
+            qs = TeacherEvaluation.objects.select_related(
+                'student', 'teacher', 'course', 'term'
+            )
+        elif user.has_role('TEACHER'):
+            qs = TeacherEvaluation.objects.filter(
+                teacher=user,
+            ).select_related('student', 'teacher', 'course', 'term')
+        else:
+            return _forbidden()
+
+        return _ok(TeacherEvaluationSerializer(qs, many=True).data)
+
+    def create(self, request):
+        user = request.user
+        if not user.has_role('STUDENT'):
+            return _forbidden('Only students can submit evaluations.')
+
+        serializer = TeacherEvaluationSerializer(data=request.data)
+        if not serializer.is_valid():
+            return _err('Validation error.', serializer.errors)
+
+        teacher = serializer.validated_data['teacher']
+        course = serializer.validated_data['course']
+        term = serializer.validated_data['term']
+
+        # Student must be enrolled in that course/term
+        if not Enrollment.objects.filter(
+            student=user, course=course, term=term, is_active=True,
+        ).exists():
+            return _forbidden('Not enrolled in this course for the given term.')
+
+        # Teacher must be assigned to that course/term
+        if not TeacherCourseAssignment.objects.filter(
+            teacher=teacher, course=course, term=term, is_active=True,
+        ).exists():
+            return _err('Teacher is not assigned to this course for the given term.')
+
+        try:
+            evaluation = serializer.save(student=user)
+        except Exception:
+            return _err(
+                'You have already submitted an evaluation for this teacher/course/term.',
+                status_code=status.HTTP_409_CONFLICT,
+            )
+
+        return _ok(
+            TeacherEvaluationSerializer(evaluation).data,
+            'Evaluation submitted.',
+            status.HTTP_201_CREATED,
+        )

@@ -4,7 +4,7 @@ from decimal import Decimal
 from django.conf import settings
 from django.db import models
 
-from apps.academics.models import TeacherCourseAssignment
+from apps.academics.models import Course, TeacherCourseAssignment, Term
 
 
 class Resource(models.Model):
@@ -165,3 +165,125 @@ class QuizAnswer(models.Model):
 
     def __str__(self):
         return f'Answer to Q{self.question.order} in attempt {self.attempt.id}'
+
+
+# ---------------------------------------------------------------------------
+# Assignment lifecycle models
+# ---------------------------------------------------------------------------
+
+class Assignment(models.Model):
+    DRAFT = 'DRAFT'
+    OPEN = 'OPEN'
+    CLOSED = 'CLOSED'
+    STATUS_CHOICES = [
+        (DRAFT, 'Draft'),
+        (OPEN, 'Open'),
+        (CLOSED, 'Closed'),
+    ]
+
+    DOCUMENT = 'DOCUMENT'
+    TEXT = 'TEXT'
+    BOTH = 'BOTH'
+    SUBMISSION_TYPE_CHOICES = [
+        (DOCUMENT, 'Document'),
+        (TEXT, 'Text'),
+        (BOTH, 'Both'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    assignment = models.ForeignKey(
+        TeacherCourseAssignment,
+        on_delete=models.CASCADE,
+        related_name='course_assignments',
+    )
+    title = models.CharField(max_length=200)
+    description = models.TextField()
+    due_datetime = models.DateTimeField()
+    submission_type = models.CharField(
+        max_length=10, choices=SUBMISSION_TYPE_CHOICES, default=BOTH
+    )
+    max_marks = models.DecimalField(max_digits=6, decimal_places=2)
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default=DRAFT)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'course_assignments'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['status', 'due_datetime']),
+        ]
+
+    def __str__(self):
+        return f'{self.title} [{self.status}]'
+
+
+class AssignmentSubmission(models.Model):
+    SUBMITTED = 'SUBMITTED'
+    GRADED = 'GRADED'
+    LATE = 'LATE'
+    STATUS_CHOICES = [
+        (SUBMITTED, 'Submitted'),
+        (GRADED, 'Graded'),
+        (LATE, 'Late'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    assignment = models.ForeignKey(
+        Assignment, on_delete=models.CASCADE, related_name='submissions'
+    )
+    student = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='assignment_submissions',
+    )
+    submitted_at = models.DateTimeField(auto_now_add=True)
+    text_content = models.TextField(null=True, blank=True)
+    file = models.FileField(upload_to='assignment_submissions/', null=True, blank=True)
+    marks_obtained = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
+    feedback = models.TextField(null=True, blank=True)
+    graded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='graded_submissions',
+    )
+    graded_at = models.DateTimeField(null=True, blank=True)
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default=SUBMITTED)
+
+    class Meta:
+        db_table = 'assignment_submissions'
+        unique_together = [('assignment', 'student')]
+
+    def __str__(self):
+        return f'{self.student.school_id} → {self.assignment.title}'
+
+
+# ---------------------------------------------------------------------------
+# Teacher Evaluation
+# ---------------------------------------------------------------------------
+
+class TeacherEvaluation(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    student = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='given_evaluations',
+    )
+    teacher = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='received_evaluations',
+    )
+    course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='evaluations')
+    term = models.ForeignKey(Term, on_delete=models.CASCADE, related_name='evaluations')
+    rating = models.PositiveSmallIntegerField()  # 1-5, validated in serializer
+    comment = models.TextField(null=True, blank=True)
+    submitted_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'teacher_evaluations'
+        unique_together = [('student', 'teacher', 'course', 'term')]
+
+    def __str__(self):
+        return f'{self.student.school_id} → {self.teacher.school_id} ({self.course.code})'

@@ -1,6 +1,13 @@
 from django.urls import path
 
-from apps.assessments.views import QuizAttemptViewSet, QuizViewSet, ResourceViewSet
+from apps.assessments.views import (
+    AssignmentSubmissionViewSet,
+    CourseAssignmentViewSet,
+    QuizAttemptViewSet,
+    QuizViewSet,
+    ResourceViewSet,
+    TeacherEvaluationViewSet,
+)
 
 resource_list = ResourceViewSet.as_view({'get': 'list', 'post': 'create'})
 resource_detail = ResourceViewSet.as_view({'delete': 'destroy'})
@@ -32,4 +39,45 @@ urlpatterns = [
     path('quizzes/<uuid:pk>/submissions/', quiz_submissions, name='quiz-submissions'),
     # Attempt submit
     path('quiz-attempts/<uuid:pk>/submit/', attempt_submit, name='attempt-submit'),
+
+    # Course assignments
+    path(
+        'course-assignments/',
+        CourseAssignmentViewSet.as_view({'get': 'list', 'post': 'create'}),
+        name='course-assignment-list',
+    ),
+    path(
+        'course-assignments/<uuid:pk>/',
+        CourseAssignmentViewSet.as_view({'get': 'retrieve', 'patch': 'partial_update'}),
+        name='course-assignment-detail',
+    ),
+    path(
+        'course-assignments/<uuid:pk>/publish/',
+        CourseAssignmentViewSet.as_view({'post': 'publish'}),
+        name='course-assignment-publish',
+    ),
+    path(
+        'course-assignments/<uuid:pk>/submit/',
+        CourseAssignmentViewSet.as_view({'post': 'submit'}),
+        name='course-assignment-submit',
+    ),
+    path(
+        'course-assignments/<uuid:pk>/submissions/',
+        CourseAssignmentViewSet.as_view({'get': 'submissions'}),
+        name='course-assignment-submissions',
+    ),
+
+    # Submission grading
+    path(
+        'assignment-submissions/<uuid:pk>/grade/',
+        AssignmentSubmissionViewSet.as_view({'patch': 'grade'}),
+        name='assignment-submission-grade',
+    ),
+
+    # Teacher evaluations
+    path(
+        'evaluations/',
+        TeacherEvaluationViewSet.as_view({'get': 'list', 'post': 'create'}),
+        name='evaluation-list',
+    ),
 ]
