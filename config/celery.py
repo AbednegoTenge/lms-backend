@@ -14,4 +14,8 @@ app.conf.beat_schedule = {
         'task': 'apps.assessments.tasks.close_expired_quizzes',
         'schedule': crontab(minute='*/5'),
     },
+    'close-expired-assignments-every-5-minutes': {
+        'task': 'apps.assessments.tasks.close_expired_assignments',
+        'schedule': crontab(minute='*/5'),
+    },
 }

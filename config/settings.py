@@ -194,6 +194,7 @@ REST_FRAMEWORK = {
         'auth': '5/min',
         'upload': '10/hour',
         'report': '20/hour',
+        'transition': '2/hour',
     },
     'DEFAULT_FILTER_BACKENDS': [
         'django_filters.rest_framework.DjangoFilterBackend',
