@@ -36,6 +36,7 @@ from apps.assessments.serializers import (
 )
 from apps.assessments.services import validate_resource_file
 from apps.enrollment.models import Enrollment
+from apps.users.permissions import IsAdminOrPrincipalOrTeacher, IsStudent
 
 
 class UploadThrottle(UserRateThrottle):
@@ -248,8 +249,18 @@ class QuizViewSet(viewsets.GenericViewSet):
     GET    /api/v1/quizzes/{id}/submissions/  list submissions
     """
 
-    permission_classes = [IsAuthenticated]
     serializer_class = QuizSerializer
+
+    def get_permissions(self):
+        # list: Admin/Principal/SuperAdmin/Teacher only (queryset differs per role inside view)
+        if self.action == 'list':
+            return [IsAdminOrPrincipalOrTeacher()]
+        # start_attempt: students only
+        if self.action == 'start_attempt':
+            return [IsStudent()]
+        # create/retrieve/partial_update/publish/submissions: any authenticated user;
+        # object-level ownership enforced inside each action method
+        return [IsAuthenticated()]
 
     def _get_quiz(self, pk):
         try:
@@ -371,8 +382,6 @@ class QuizViewSet(viewsets.GenericViewSet):
         quiz = self._get_quiz(pk)
         user = request.user
 
-        if not user.has_role('STUDENT'):
-            return _forbidden('Only students can attempt quizzes.')
         if not _is_enrolled(user, quiz.assignment):
             return _forbidden('Not enrolled in this course.')
         if quiz.status != Quiz.OPEN:
@@ -445,7 +454,10 @@ class QuizAttemptViewSet(viewsets.GenericViewSet):
     """
     POST /api/v1/quiz-attempts/{id}/submit/
     """
-    permission_classes = [IsAuthenticated]
+
+    def get_permissions(self):
+        # submit is a student-only action; _get_attempt also filters by student=user
+        return [IsStudent()]
 
     def _get_attempt(self, pk, user):
         try:
@@ -568,8 +580,16 @@ class CourseAssignmentViewSet(viewsets.GenericViewSet):
     POST   /api/v1/course-assignments/{id}/submit/    student submits
     GET    /api/v1/course-assignments/{id}/submissions/ list submissions
     """
-    permission_classes = [IsAuthenticated]
+
     serializer_class = AssignmentSerializer
+
+    def get_permissions(self):
+        # submit: students only
+        if self.action == 'submit':
+            return [IsStudent()]
+        # list: all roles may call it; queryset is role-filtered inside the method
+        # create/retrieve/partial_update/publish/submissions: authenticated; object-level in method
+        return [IsAuthenticated()]
 
     def _get_assignment(self, pk):
         try:
@@ -711,8 +731,6 @@ class CourseAssignmentViewSet(viewsets.GenericViewSet):
         obj = self._get_assignment(pk)
         user = request.user
 
-        if not user.has_role('STUDENT'):
-            return _forbidden('Only students can submit assignments.')
         if not _is_enrolled(user, obj.assignment):
             return _forbidden('Not enrolled in this course.')
         if obj.status != Assignment.OPEN:
@@ -791,7 +809,11 @@ class AssignmentSubmissionViewSet(viewsets.GenericViewSet):
     """
     PATCH /api/v1/assignment-submissions/{id}/grade/
     """
-    permission_classes = [IsAuthenticated]
+
+    def get_permissions(self):
+        # grade: Super Admin or teacher who owns the course; enforced inside the action
+        # Use IsAuthenticated here; the ownership check runs after the object is fetched
+        return [IsAuthenticated()]
 
     def _get_submission(self, pk):
         try:
@@ -847,28 +869,30 @@ class TeacherEvaluationViewSet(viewsets.GenericViewSet):
     POST /api/v1/evaluations/   student submits evaluation
     GET  /api/v1/evaluations/   admin/principal see all; teacher sees own received
     """
-    permission_classes = [IsAuthenticated]
+
+    def get_permissions(self):
+        # create: students only
+        if self.action == 'create':
+            return [IsStudent()]
+        # list: Admin/Principal/SuperAdmin/Teacher (students are forbidden)
+        return [IsAdminOrPrincipalOrTeacher()]
 
     def list(self, request):
         user = request.user
-        if user.has_any_role(['ADMIN', 'SUPER_ADMIN', 'PRINCIPAL']):
-            qs = TeacherEvaluation.objects.select_related(
-                'student', 'teacher', 'course', 'term'
-            )
-        elif user.has_role('TEACHER'):
+        # get_permissions() already blocks students; Admin/Principal/SuperAdmin see all,
+        # Teachers see only evaluations they received.
+        if user.has_role('TEACHER'):
             qs = TeacherEvaluation.objects.filter(
                 teacher=user,
             ).select_related('student', 'teacher', 'course', 'term')
         else:
-            return _forbidden()
-
+            qs = TeacherEvaluation.objects.select_related(
+                'student', 'teacher', 'course', 'term'
+            )
         return _ok(TeacherEvaluationSerializer(qs, many=True).data)
 
     def create(self, request):
         user = request.user
-        if not user.has_role('STUDENT'):
-            return _forbidden('Only students can submit evaluations.')
-
         serializer = TeacherEvaluationSerializer(data=request.data)
         if not serializer.is_valid():
             return _err('Validation error.', serializer.errors)
