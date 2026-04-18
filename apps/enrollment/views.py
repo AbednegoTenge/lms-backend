@@ -71,6 +71,8 @@ class StudentViewSet(viewsets.GenericViewSet):
             return [IsAdminOrPrincipalOrSelf()]
         if self.action == 'courses':
             return [CanViewStudentCourses()]
+        if self.action == 'fees':
+            return [IsAdminOrPrincipalOrSelf()]
         return [IsAuthenticated()]
 
     def get_queryset(self):
@@ -292,3 +294,24 @@ class StudentViewSet(viewsets.GenericViewSet):
             .select_related('course', 'term__academic_year', 'level')
         )
         return _ok(EnrollmentSerializer(enrollments, many=True).data)
+
+    # ------------------------------------------------------------------
+    # FEES
+    # ------------------------------------------------------------------
+
+    @action(detail=True, methods=['get'], url_path='fees')
+    def fees(self, request, pk=None):
+        profile = self._get_student_profile(pk)
+        if profile is None:
+            return _err('Student not found.', status_code=status.HTTP_404_NOT_FOUND)
+
+        self.check_object_permissions(request, profile)
+        from apps.fees.models import StudentFee
+        from apps.fees.serializers import StudentFeeSerializer
+        student_fees = (
+            StudentFee.objects
+            .filter(student=profile.user)
+            .select_related('term__academic_year')
+            .prefetch_related('payments__recorded_by')
+        )
+        return _ok(StudentFeeSerializer(student_fees, many=True).data)
