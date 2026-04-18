@@ -53,6 +53,27 @@ def _err(message, errors=None, status_code=status.HTTP_400_BAD_REQUEST):
     )
 
 
+_STATIC_CACHE_TIMEOUT = 86400   # 24 h — seeded by migration, never mutated
+_LIST_CACHE_TIMEOUT = 3600      # 1 h — mutable but rarely-changed lists
+_PAGINATION_PARAMS = frozenset(['page', 'page_size', 'limit', 'offset'])
+
+
+def _list_cache_key(prefix, request):
+    params = '&'.join(
+        f'{k}={v}'
+        for k, v in sorted(request.query_params.items())
+        if k not in _PAGINATION_PARAMS
+    )
+    return f'{prefix}:{params or "all"}'
+
+
+def _delete_pattern(pattern):
+    try:
+        cache.delete_pattern(pattern)
+    except Exception:
+        pass
+
+
 class AdminWriteAuthReadMixin:
     """GET/HEAD/OPTIONS allowed for any authenticated user; write ops require Admin/SuperAdmin."""
 
@@ -75,6 +96,9 @@ class AcademicYearViewSet(AdminWriteAuthReadMixin, viewsets.ModelViewSet):
     def get_queryset(self):
         return AcademicYear.objects.select_related('created_by').all()
 
+    def _invalidate_cache(self):
+        _delete_pattern('academic_year:list:*')
+
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
 
@@ -83,6 +107,7 @@ class AcademicYearViewSet(AdminWriteAuthReadMixin, viewsets.ModelViewSet):
         if not serializer.is_valid():
             return _err('Validation error.', serializer.errors)
         self.perform_create(serializer)
+        self._invalidate_cache()
         return _ok(serializer.data, 'Academic year created.', status.HTTP_201_CREATED)
 
     def update(self, request, *args, **kwargs):
@@ -92,6 +117,7 @@ class AcademicYearViewSet(AdminWriteAuthReadMixin, viewsets.ModelViewSet):
         if not serializer.is_valid():
             return _err('Validation error.', serializer.errors)
         self.perform_update(serializer)
+        self._invalidate_cache()
         return _ok(serializer.data, 'Academic year updated.')
 
     def retrieve(self, request, *args, **kwargs):
@@ -99,15 +125,22 @@ class AcademicYearViewSet(AdminWriteAuthReadMixin, viewsets.ModelViewSet):
         return _ok(self.get_serializer(instance).data)
 
     def list(self, request, *args, **kwargs):
+        cache_key = _list_cache_key('academic_year:list', request)
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return _ok(cached)
         qs = self.filter_queryset(self.get_queryset())
         page = self.paginate_queryset(qs)
         if page is not None:
             data = self.get_serializer(page, many=True).data
             return self.get_paginated_response({'success': True, 'data': data})
-        return _ok(self.get_serializer(qs, many=True).data)
+        data = self.get_serializer(qs, many=True).data
+        cache.set(cache_key, data, _LIST_CACHE_TIMEOUT)
+        return _ok(data)
 
     def destroy(self, request, *args, **kwargs):
         self.get_object().delete()
+        self._invalidate_cache()
         return Response({'success': True, 'message': 'Academic year deleted.', 'data': {}},
                         status=status.HTTP_204_NO_CONTENT)
 
@@ -122,6 +155,9 @@ class TermViewSet(AdminWriteAuthReadMixin, viewsets.ModelViewSet):
     filterset_fields = ['academic_year', 'term_number', 'is_current']
     ordering_fields = ['term_number']
 
+    def _invalidate_cache(self):
+        _delete_pattern('term:list:*')
+
     def get_queryset(self):
         return Term.objects.select_related('academic_year').all()
 
@@ -130,6 +166,7 @@ class TermViewSet(AdminWriteAuthReadMixin, viewsets.ModelViewSet):
         if not serializer.is_valid():
             return _err('Validation error.', serializer.errors)
         serializer.save()
+        self._invalidate_cache()
         return _ok(serializer.data, 'Term created.', status.HTTP_201_CREATED)
 
     def update(self, request, *args, **kwargs):
@@ -139,21 +176,29 @@ class TermViewSet(AdminWriteAuthReadMixin, viewsets.ModelViewSet):
         if not serializer.is_valid():
             return _err('Validation error.', serializer.errors)
         self.perform_update(serializer)
+        self._invalidate_cache()
         return _ok(serializer.data, 'Term updated.')
 
     def retrieve(self, request, *args, **kwargs):
         return _ok(self.get_serializer(self.get_object()).data)
 
     def list(self, request, *args, **kwargs):
+        cache_key = _list_cache_key('term:list', request)
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return _ok(cached)
         qs = self.filter_queryset(self.get_queryset())
         page = self.paginate_queryset(qs)
         if page is not None:
             data = self.get_serializer(page, many=True).data
             return self.get_paginated_response({'success': True, 'data': data})
-        return _ok(self.get_serializer(qs, many=True).data)
+        data = self.get_serializer(qs, many=True).data
+        cache.set(cache_key, data, _LIST_CACHE_TIMEOUT)
+        return _ok(data)
 
     def destroy(self, request, *args, **kwargs):
         self.get_object().delete()
+        self._invalidate_cache()
         return Response({'success': True, 'message': 'Term deleted.', 'data': {}},
                         status=status.HTTP_204_NO_CONTENT)
 
@@ -170,6 +215,7 @@ class TermViewSet(AdminWriteAuthReadMixin, viewsets.ModelViewSet):
             result = TermTransitionService.transition()
         except TransitionError as exc:
             return _err(str(exc), status_code=status.HTTP_400_BAD_REQUEST)
+        self._invalidate_cache()
         return _ok(result, 'Term transitioned successfully.')
 
 
@@ -186,7 +232,12 @@ class LevelViewSet(viewsets.ReadOnlyModelViewSet):
         return _ok(self.get_serializer(self.get_object()).data)
 
     def list(self, request, *args, **kwargs):
-        return _ok(self.get_serializer(self.get_queryset(), many=True).data)
+        cached = cache.get('level:list')
+        if cached is not None:
+            return _ok(cached)
+        data = self.get_serializer(self.get_queryset(), many=True).data
+        cache.set('level:list', data, _STATIC_CACHE_TIMEOUT)
+        return _ok(data)
 
 
 # ---------------------------------------------------------------------------
@@ -202,7 +253,12 @@ class ProgramViewSet(viewsets.ReadOnlyModelViewSet):
         return _ok(self.get_serializer(self.get_object()).data)
 
     def list(self, request, *args, **kwargs):
-        return _ok(self.get_serializer(self.get_queryset(), many=True).data)
+        cached = cache.get('program:list')
+        if cached is not None:
+            return _ok(cached)
+        data = self.get_serializer(self.get_queryset(), many=True).data
+        cache.set('program:list', data, _STATIC_CACHE_TIMEOUT)
+        return _ok(data)
 
 
 # ---------------------------------------------------------------------------

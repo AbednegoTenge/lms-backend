@@ -1,5 +1,6 @@
 import datetime
 
+from django.core.cache import cache
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters, status, viewsets
 from rest_framework.decorators import action
@@ -23,6 +24,9 @@ from apps.users.services import UserService
 # ---------------------------------------------------------------------------
 # Helpers (same pattern as academics)
 # ---------------------------------------------------------------------------
+
+_STUDENT_COURSES_CACHE_TIMEOUT = 1800  # 30 min
+
 
 def _ok(data, message='', status_code=status.HTTP_200_OK):
     return Response({'success': True, 'data': data, 'message': message}, status=status_code)
@@ -240,6 +244,7 @@ class StudentViewSet(viewsets.GenericViewSet):
                 level=profile.level,
             )
 
+        cache.delete(f'student:{profile.user_id}:courses')
         return _ok(
             {'school_id': profile.user.school_id, 'program': program.get_name_display()},
             'Program assigned. Core courses enrolled.',
@@ -275,6 +280,7 @@ class StudentViewSet(viewsets.GenericViewSet):
         except ValueError as exc:
             return _err(str(exc), status_code=status.HTTP_400_BAD_REQUEST)
 
+        cache.delete(f'student:{profile.user_id}:courses')
         return _ok({'enrolled': count}, f'Enrolled in {count} electives.')
 
     # ------------------------------------------------------------------
@@ -288,12 +294,18 @@ class StudentViewSet(viewsets.GenericViewSet):
             return _err('Student not found.', status_code=status.HTTP_404_NOT_FOUND)
 
         self.check_object_permissions(request, profile)
+        cache_key = f'student:{profile.user_id}:courses'
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return _ok(cached)
         enrollments = (
             Enrollment.objects
             .filter(student=profile.user)
             .select_related('course', 'term__academic_year', 'level')
         )
-        return _ok(EnrollmentSerializer(enrollments, many=True).data)
+        data = EnrollmentSerializer(enrollments, many=True).data
+        cache.set(cache_key, data, _STUDENT_COURSES_CACHE_TIMEOUT)
+        return _ok(data)
 
     # ------------------------------------------------------------------
     # FEES

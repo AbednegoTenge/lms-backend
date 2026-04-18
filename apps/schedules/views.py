@@ -1,3 +1,4 @@
+from django.core.cache import cache
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import status, viewsets
 from rest_framework.permissions import IsAuthenticated
@@ -11,6 +12,25 @@ from apps.schedules.serializers import (
 )
 from apps.schedules.services import TimetableService
 from apps.users.permissions import IsAdminOrSuperAdmin
+
+_SCHEDULE_CACHE_TIMEOUT = 3600  # 1 h
+_PAGINATION_PARAMS = frozenset(['page', 'page_size', 'limit', 'offset'])
+
+
+def _list_cache_key(prefix, request):
+    params = '&'.join(
+        f'{k}={v}'
+        for k, v in sorted(request.query_params.items())
+        if k not in _PAGINATION_PARAMS
+    )
+    return f'{prefix}:{params or "all"}'
+
+
+def _delete_pattern(pattern):
+    try:
+        cache.delete_pattern(pattern)
+    except Exception:
+        pass
 
 
 def _ok(data, message='', status_code=status.HTTP_200_OK):
@@ -42,8 +62,14 @@ class ClassTimetableViewSet(viewsets.GenericViewSet):
         )
 
     def list(self, request):
+        cache_key = _list_cache_key('timetable:list', request)
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return _ok(cached)
         qs = self.filter_queryset(self.get_queryset())
-        return _ok(self.get_serializer(qs, many=True).data)
+        data = self.get_serializer(qs, many=True).data
+        cache.set(cache_key, data, _SCHEDULE_CACHE_TIMEOUT)
+        return _ok(data)
 
     def retrieve(self, request, pk=None):
         try:
@@ -62,6 +88,7 @@ class ClassTimetableViewSet(viewsets.GenericViewSet):
                 f'Timetable conflict: {conflict} is already booked at that time.',
                 status_code=status.HTTP_409_CONFLICT,
             )
+        _delete_pattern('timetable:list:*')
         return _ok(self.get_serializer(obj).data, 'Timetable entry created.', status.HTTP_201_CREATED)
 
     def partial_update(self, request, pk=None):
@@ -78,6 +105,7 @@ class ClassTimetableViewSet(viewsets.GenericViewSet):
                 f'Timetable conflict: {conflict} is already booked at that time.',
                 status_code=status.HTTP_409_CONFLICT,
             )
+        _delete_pattern('timetable:list:*')
         return _ok(self.get_serializer(updated).data, 'Timetable entry updated.')
 
     def destroy(self, request, pk=None):
@@ -86,6 +114,7 @@ class ClassTimetableViewSet(viewsets.GenericViewSet):
         except ClassTimetable.DoesNotExist:
             return _err('Timetable entry not found.', status_code=status.HTTP_404_NOT_FOUND)
         obj.delete()
+        _delete_pattern('timetable:list:*')
         return Response({'success': True, 'message': 'Timetable entry deleted.', 'data': {}},
                         status=status.HTTP_204_NO_CONTENT)
 
@@ -108,8 +137,14 @@ class ExamScheduleViewSet(viewsets.GenericViewSet):
         )
 
     def list(self, request):
+        cache_key = _list_cache_key('exam_schedule:list', request)
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return _ok(cached)
         qs = self.filter_queryset(self.get_queryset())
-        return _ok(self.get_serializer(qs, many=True).data)
+        data = self.get_serializer(qs, many=True).data
+        cache.set(cache_key, data, _SCHEDULE_CACHE_TIMEOUT)
+        return _ok(data)
 
     def retrieve(self, request, pk=None):
         try:
@@ -123,6 +158,7 @@ class ExamScheduleViewSet(viewsets.GenericViewSet):
         if not serializer.is_valid():
             return _err('Validation error.', serializer.errors)
         obj = serializer.save()
+        _delete_pattern('exam_schedule:list:*')
         return _ok(self.get_serializer(obj).data, 'Exam schedule created.', status.HTTP_201_CREATED)
 
     def partial_update(self, request, pk=None):
@@ -134,6 +170,7 @@ class ExamScheduleViewSet(viewsets.GenericViewSet):
         if not serializer.is_valid():
             return _err('Validation error.', serializer.errors)
         serializer.save()
+        _delete_pattern('exam_schedule:list:*')
         return _ok(self.get_serializer(obj).data, 'Exam schedule updated.')
 
     def destroy(self, request, pk=None):
@@ -142,6 +179,7 @@ class ExamScheduleViewSet(viewsets.GenericViewSet):
         except ExamSchedule.DoesNotExist:
             return _err('Exam schedule not found.', status_code=status.HTTP_404_NOT_FOUND)
         obj.delete()
+        _delete_pattern('exam_schedule:list:*')
         return Response({'success': True, 'message': 'Exam schedule deleted.', 'data': {}},
                         status=status.HTTP_204_NO_CONTENT)
 
@@ -160,8 +198,14 @@ class HolidayViewSet(viewsets.GenericViewSet):
         return Holiday.objects.select_related('academic_year').all()
 
     def list(self, request):
+        cache_key = _list_cache_key('holiday:list', request)
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return _ok(cached)
         qs = self.filter_queryset(self.get_queryset())
-        return _ok(self.get_serializer(qs, many=True).data)
+        data = self.get_serializer(qs, many=True).data
+        cache.set(cache_key, data, _SCHEDULE_CACHE_TIMEOUT)
+        return _ok(data)
 
     def retrieve(self, request, pk=None):
         try:
@@ -175,6 +219,7 @@ class HolidayViewSet(viewsets.GenericViewSet):
         if not serializer.is_valid():
             return _err('Validation error.', serializer.errors)
         obj = serializer.save()
+        _delete_pattern('holiday:list:*')
         return _ok(self.get_serializer(obj).data, 'Holiday created.', status.HTTP_201_CREATED)
 
     def partial_update(self, request, pk=None):
@@ -186,6 +231,7 @@ class HolidayViewSet(viewsets.GenericViewSet):
         if not serializer.is_valid():
             return _err('Validation error.', serializer.errors)
         serializer.save()
+        _delete_pattern('holiday:list:*')
         return _ok(self.get_serializer(obj).data, 'Holiday updated.')
 
     def destroy(self, request, pk=None):
@@ -194,5 +240,6 @@ class HolidayViewSet(viewsets.GenericViewSet):
         except Holiday.DoesNotExist:
             return _err('Holiday not found.', status_code=status.HTTP_404_NOT_FOUND)
         obj.delete()
+        _delete_pattern('holiday:list:*')
         return Response({'success': True, 'message': 'Holiday deleted.', 'data': {}},
                         status=status.HTTP_204_NO_CONTENT)
