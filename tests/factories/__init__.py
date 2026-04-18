@@ -23,6 +23,12 @@ from tests.factories.assessments_factory import (
     TeacherEvaluationFactory,
 )
 from tests.factories.enrollment_factory import EnrollmentFactory, StudentProfileFactory
+from tests.factories.fees_factory import (
+    AdditionalFeeFactory,
+    FeeStructureFactory,
+    PaymentFactory,
+    StudentFeeFactory,
+)
 from tests.factories.user_factory import RoleFactory, UserFactory, UserRoleFactory
 
 __all__ = [
@@ -51,4 +57,8 @@ __all__ = [
     'OpenAssignmentFactory',
     'AssignmentSubmissionFactory',
     'TeacherEvaluationFactory',
+    'FeeStructureFactory',
+    'AdditionalFeeFactory',
+    'StudentFeeFactory',
+    'PaymentFactory',
 ]
