@@ -7,6 +7,10 @@ from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.users.models import AuditLog, CustomUser
+from apps.users.services import ROLE_PREFIX
+
+# Reverse map: 'STD' → 'STUDENT', 'TCH' → 'TEACHER', etc.
+_PREFIX_TO_ROLE = {prefix: role for role, prefix in ROLE_PREFIX.items()}
 
 
 # ---------------------------------------------------------------------------
@@ -48,6 +52,15 @@ class LoginSerializer(serializers.Serializer):
             raise serializers.ValidationError('Invalid school ID or password.')
         if not user.is_active:
             raise serializers.ValidationError('This account has been deactivated.')
+
+        # Validate school_id prefix matches one of the user's roles.
+        # e.g. STD001 → role must include STUDENT; TCH003 → must include TEACHER.
+        claimed_role = next(
+            (role for prefix, role in _PREFIX_TO_ROLE.items() if school_id.startswith(prefix)),
+            None,
+        )
+        if claimed_role and not user.has_role(claimed_role):
+            raise serializers.ValidationError('Invalid school ID or password.')
 
         attrs['user'] = user
         return attrs
