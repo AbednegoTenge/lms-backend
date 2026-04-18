@@ -127,3 +127,20 @@ class CanViewStudentCourses(BasePermission):
         if user.has_any_role(['ADMIN', 'PRINCIPAL', 'SUPER_ADMIN', 'TEACHER']):
             return True
         return user.has_role('STUDENT') and str(getattr(obj, 'user_id', None)) == str(user.pk)
+
+
+class CanViewStudentFee(BasePermission):
+    """
+    View-level: any authenticated user may attempt.
+    Object-level: Admin / Principal / SuperAdmin always; Student only for own fee.
+    obj must be a StudentFee instance (exposes student_id).
+    """
+
+    def has_permission(self, request, view):
+        return request.user.is_authenticated
+
+    def has_object_permission(self, request, view, obj):
+        user = request.user
+        if user.has_any_role(['ADMIN', 'PRINCIPAL', 'SUPER_ADMIN']):
+            return True
+        return user.has_role('STUDENT') and str(getattr(obj, 'student_id', None)) == str(user.pk)
