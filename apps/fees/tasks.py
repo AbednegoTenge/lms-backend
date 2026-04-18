@@ -1,4 +1,8 @@
+import logging
+
 from celery import shared_task
+
+logger = logging.getLogger(__name__)
 
 
 @shared_task
@@ -35,4 +39,22 @@ def generate_term_fees():
         result = FeeCalculationService.calculate_for_student(profile.user, current_term)
         if result is not None:
             count += 1
+    return count
+
+
+@shared_task
+def send_fee_reminder(student_ids, message):
+    """
+    Send a fee payment reminder to the specified students.
+    Logs the reminder; full announcement integration can be wired in Phase 8.
+    """
+    from apps.users.models import CustomUser
+
+    recipients = CustomUser.objects.filter(pk__in=student_ids, is_active=True)
+    count = recipients.count()
+    logger.info(
+        'Fee reminder sent to %d student(s): %s',
+        count,
+        message[:100],
+    )
     return count
