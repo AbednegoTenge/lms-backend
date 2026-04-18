@@ -29,6 +29,8 @@ from tests.factories.fees_factory import (
     PaymentFactory,
     StudentFeeFactory,
 )
+from tests.factories.announcements_factory import AnnouncementFactory, AnnouncementRecipientFactory
+from tests.factories.schedules_factory import ClassTimetableFactory, ExamScheduleFactory, HolidayFactory
 from tests.factories.user_factory import RoleFactory, UserFactory, UserRoleFactory
 
 __all__ = [
@@ -61,4 +63,9 @@ __all__ = [
     'AdditionalFeeFactory',
     'StudentFeeFactory',
     'PaymentFactory',
+    'ClassTimetableFactory',
+    'ExamScheduleFactory',
+    'HolidayFactory',
+    'AnnouncementFactory',
+    'AnnouncementRecipientFactory',
 ]

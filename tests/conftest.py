@@ -6,6 +6,13 @@ from tests.factories.user_factory import UserFactory, RoleFactory, UserRoleFacto
 
 
 @pytest.fixture(autouse=True)
+def celery_eager(settings):
+    """Run all Celery tasks synchronously in tests."""
+    settings.CELERY_TASK_ALWAYS_EAGER = True
+    settings.CELERY_TASK_EAGER_PROPAGATES = True
+
+
+@pytest.fixture(autouse=True)
 def disable_throttling(settings):
     """Disable throttling and clear the cache (throttle state) between tests."""
     from django.core.cache import cache
