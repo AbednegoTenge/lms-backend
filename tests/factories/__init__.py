@@ -30,6 +30,8 @@ from tests.factories.fees_factory import (
     StudentFeeFactory,
 )
 from tests.factories.announcements_factory import AnnouncementFactory, AnnouncementRecipientFactory
+from tests.factories.it_support_factory import PasswordResetRequestFactory, SupportTicketFactory
+from tests.factories.reports_factory import ReportTaskFactory
 from tests.factories.schedules_factory import ClassTimetableFactory, ExamScheduleFactory, HolidayFactory
 from tests.factories.user_factory import RoleFactory, UserFactory, UserRoleFactory
 
@@ -68,4 +70,7 @@ __all__ = [
     'HolidayFactory',
     'AnnouncementFactory',
     'AnnouncementRecipientFactory',
+    'ReportTaskFactory',
+    'SupportTicketFactory',
+    'PasswordResetRequestFactory',
 ]
