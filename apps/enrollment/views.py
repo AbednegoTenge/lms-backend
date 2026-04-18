@@ -11,7 +11,12 @@ from apps.enrollment.models import Enrollment, StudentProfile
 from apps.enrollment.serializers import EnrollmentSerializer, StudentProfileSerializer
 from apps.enrollment.services import EnrollmentService
 from apps.users.models import CustomUser, Role, UserRole
-from apps.users.permissions import IsAdminOrPrincipal, IsAdminOrSuperAdmin
+from apps.users.permissions import (
+    CanViewStudentCourses,
+    IsAdminOrPrincipal,
+    IsAdminOrPrincipalOrSelf,
+    IsAdminOrSuperAdmin,
+)
 from apps.users.services import UserService
 
 
@@ -54,6 +59,20 @@ class StudentViewSet(viewsets.GenericViewSet):
     search_fields = ['user__first_name', 'user__last_name', 'user__school_id']
     ordering_fields = ['user__school_id', 'enrolled_date']
 
+    def get_permissions(self):
+        if self.action == 'list':
+            return [IsAdminOrPrincipal()]
+        if self.action in (
+            'create', 'partial_update', 'destroy',
+            'assign_program', 'enroll_electives',
+        ):
+            return [IsAdminOrSuperAdmin()]
+        if self.action == 'retrieve':
+            return [IsAdminOrPrincipalOrSelf()]
+        if self.action == 'courses':
+            return [CanViewStudentCourses()]
+        return [IsAuthenticated()]
+
     def get_queryset(self):
         return (
             StudentProfile.objects
@@ -77,9 +96,6 @@ class StudentViewSet(viewsets.GenericViewSet):
     # ------------------------------------------------------------------
 
     def list(self, request):
-        if not request.user.has_any_role(['ADMIN', 'PRINCIPAL', 'SUPER_ADMIN']):
-            return _err('Permission denied.', status_code=status.HTTP_403_FORBIDDEN)
-
         qs = self.filter_queryset(self.get_queryset())
         page = self.paginate_queryset(qs)
         if page is not None:
@@ -92,9 +108,6 @@ class StudentViewSet(viewsets.GenericViewSet):
     # ------------------------------------------------------------------
 
     def create(self, request):
-        if not request.user.has_any_role(['ADMIN', 'SUPER_ADMIN']):
-            return _err('Permission denied.', status_code=status.HTTP_403_FORBIDDEN)
-
         data = request.data
         required = ['first_name', 'last_name', 'password', 'level', 'enrolled_date']
         missing = [f for f in required if not data.get(f)]
@@ -152,12 +165,7 @@ class StudentViewSet(viewsets.GenericViewSet):
         if profile is None:
             return _err('Student not found.', status_code=status.HTTP_404_NOT_FOUND)
 
-        user = request.user
-        is_own = user.has_role('STUDENT') and str(profile.user_id) == str(user.pk)
-        allowed = user.has_any_role(['ADMIN', 'PRINCIPAL', 'SUPER_ADMIN']) or is_own
-        if not allowed:
-            return _err('Permission denied.', status_code=status.HTTP_403_FORBIDDEN)
-
+        self.check_object_permissions(request, profile)
         return _ok(self.get_serializer(profile).data)
 
     # ------------------------------------------------------------------
@@ -165,12 +173,12 @@ class StudentViewSet(viewsets.GenericViewSet):
     # ------------------------------------------------------------------
 
     def partial_update(self, request, pk=None):
-        if not request.user.has_any_role(['ADMIN', 'SUPER_ADMIN']):
-            return _err('Permission denied.', status_code=status.HTTP_403_FORBIDDEN)
-
         profile = self._get_student_profile(pk)
         if profile is None:
             return _err('Student not found.', status_code=status.HTTP_404_NOT_FOUND)
+
+        if profile.status == StudentProfile.GRADUATED:
+            return _err('Cannot modify a graduated student.', status_code=status.HTTP_403_FORBIDDEN)
 
         serializer = self.get_serializer(profile, data=request.data, partial=True)
         if not serializer.is_valid():
@@ -183,9 +191,6 @@ class StudentViewSet(viewsets.GenericViewSet):
     # ------------------------------------------------------------------
 
     def destroy(self, request, pk=None):
-        if not request.user.has_any_role(['ADMIN', 'SUPER_ADMIN']):
-            return _err('Permission denied.', status_code=status.HTTP_403_FORBIDDEN)
-
         profile = self._get_student_profile(pk)
         if profile is None:
             return _err('Student not found.', status_code=status.HTTP_404_NOT_FOUND)
@@ -204,12 +209,12 @@ class StudentViewSet(viewsets.GenericViewSet):
 
     @action(detail=True, methods=['post'], url_path='assign-program')
     def assign_program(self, request, pk=None):
-        if not request.user.has_any_role(['ADMIN', 'SUPER_ADMIN']):
-            return _err('Permission denied.', status_code=status.HTTP_403_FORBIDDEN)
-
         profile = self._get_student_profile(pk)
         if profile is None:
             return _err('Student not found.', status_code=status.HTTP_404_NOT_FOUND)
+
+        if profile.status == StudentProfile.GRADUATED:
+            return _err('Cannot modify a graduated student.', status_code=status.HTTP_403_FORBIDDEN)
 
         program_id = request.data.get('program_id')
         if not program_id:
@@ -244,12 +249,12 @@ class StudentViewSet(viewsets.GenericViewSet):
 
     @action(detail=True, methods=['post'], url_path='enroll-electives')
     def enroll_electives(self, request, pk=None):
-        if not request.user.has_any_role(['ADMIN', 'SUPER_ADMIN']):
-            return _err('Permission denied.', status_code=status.HTTP_403_FORBIDDEN)
-
         profile = self._get_student_profile(pk)
         if profile is None:
             return _err('Student not found.', status_code=status.HTTP_404_NOT_FOUND)
+
+        if profile.status == StudentProfile.GRADUATED:
+            return _err('Cannot modify a graduated student.', status_code=status.HTTP_403_FORBIDDEN)
 
         course_ids = request.data.get('course_ids', [])
 
@@ -280,14 +285,7 @@ class StudentViewSet(viewsets.GenericViewSet):
         if profile is None:
             return _err('Student not found.', status_code=status.HTTP_404_NOT_FOUND)
 
-        user = request.user
-        is_own_student = user.has_role('STUDENT') and str(profile.user_id) == str(user.pk)
-        is_teacher = user.has_role('TEACHER')
-        is_admin_like = user.has_any_role(['ADMIN', 'PRINCIPAL', 'SUPER_ADMIN'])
-
-        if not (is_own_student or is_teacher or is_admin_like):
-            return _err('Permission denied.', status_code=status.HTTP_403_FORBIDDEN)
-
+        self.check_object_permissions(request, profile)
         enrollments = (
             Enrollment.objects
             .filter(student=profile.user)
