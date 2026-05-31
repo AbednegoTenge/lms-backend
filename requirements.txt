@@ -41,10 +41,10 @@ mypy==1.14.1
 mypy_extensions==1.1.0
 nplusone==1.0.0
 packaging==26.0
-pillow==11.1.0
+pillow==12.2.0
 pluggy==1.6.0
 prompt_toolkit==3.0.52
-psycopg2-binary==2.9.10
+psycopg2-binary==2.9.12
 py-partiql-parser==0.6.1
 pycodestyle==2.14.0
 pycparser==3.0
