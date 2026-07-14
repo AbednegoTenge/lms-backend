@@ -1,6 +1,22 @@
 from django.db import transaction
 
 
+class CourseOutlineService:
+
+    @staticmethod
+    @transaction.atomic
+    def replace_weekly_topics(outline, topics_data):
+        """Atomically replace all weekly topics on a course outline."""
+        from apps.academics.models import WeeklyTopic
+
+        outline.weekly_topics.all().delete()
+        WeeklyTopic.objects.bulk_create(
+            [WeeklyTopic(outline=outline, **topic) for topic in topics_data]
+        )
+        outline.save()
+        return outline
+
+
 class TransitionError(Exception):
     """Raised when a term transition cannot be performed."""
 

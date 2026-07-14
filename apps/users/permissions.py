@@ -13,7 +13,14 @@ EXEMPT_PATHS = {
 
 
 class RequiresPasswordChange(BasePermission):
-    """Block all requests when must_change_password=True, except exempt paths."""
+    """Block all requests when must_change_password=True, except exempt paths.
+
+    NOTE: the actual global enforcement of this rule lives in
+    apps.users.authentication.RestrictedJWTAuthentication (wired via
+    DEFAULT_AUTHENTICATION_CLASSES), because most viewsets override
+    get_permissions() and would silently bypass a permission class here.
+    This class is kept for any view that wants an explicit, local check.
+    """
 
     message = 'Password reset required before continuing.'
 
@@ -94,6 +101,16 @@ class IsAdminOrPrincipalOrTeacher(BasePermission):
             ['ADMIN', 'PRINCIPAL', 'SUPER_ADMIN', 'TEACHER']
         )
 
+class IsTeacherOrStudentOrSuperAdmin(BasePermission):
+    """
+    Global view-level permission gate for listing quizzes.
+    Finer dataset filtering happens inside the view's list method.
+    """
+
+    def has_permission(self, request, view):
+        if not request.user.is_authenticated:
+            return False
+        return request.user.has_any_role(['STUDENT', 'TEACHER', 'SUPER_ADMIN'])
 
 class IsAdminOrPrincipalOrSelf(BasePermission):
     """

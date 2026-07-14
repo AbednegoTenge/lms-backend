@@ -156,6 +156,27 @@ class LogoutSerializer(serializers.Serializer):
         self.validated_data['token'].blacklist()
 
 
+class TeacherSerializer(serializers.ModelSerializer):
+    full_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CustomUser
+        fields = [
+            'id',
+            'school_id',
+            'full_name',
+            'first_name',
+            'last_name',
+            'email',
+            'phone',
+            'is_active',
+        ]
+        read_only_fields = fields
+
+    def get_full_name(self, obj):
+        return obj.get_full_name()
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

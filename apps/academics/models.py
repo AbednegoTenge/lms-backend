@@ -146,6 +146,13 @@ class TeacherCourseAssignment(models.Model):
         on_delete=models.CASCADE,
         related_name='assignments',
     )
+    school_class = models.ForeignKey(
+        'enrollment.SchoolClass',
+        on_delete=models.CASCADE,
+        related_name='teacher_assignments',
+        null=True,
+        blank=True,
+    )
     is_active = models.BooleanField(default=True)
     assigned_by = models.ForeignKey(
         CustomUser,
@@ -158,10 +165,11 @@ class TeacherCourseAssignment(models.Model):
 
     class Meta:
         db_table = 'teacher_course_assignments'
-        unique_together = [('teacher', 'course', 'term', 'level')]
+        unique_together = [('teacher', 'course', 'term', 'level', 'school_class')]
 
     def __str__(self):
-        return f'{self.teacher.school_id} → {self.course.code} ({self.term})'
+        class_label = self.school_class.name if self.school_class_id else 'no-class'
+        return f'{self.teacher.school_id} → {self.course.code} ({self.term}, {class_label})'
 
 
 class CourseOutline(models.Model):

@@ -24,19 +24,22 @@ class FeeCalculationService:
     """
 
     @staticmethod
-    def calculate_for_student(student, term):
+    def calculate_for_student(student, term, profile=None):
         """
         Create (or update) a StudentFee for the given student and term.
 
         Returns the StudentFee instance, or None if no applicable FeeStructure found.
         Uses update_or_create for idempotency — safe to re-run.
+        Pass `profile` (with level/program pre-fetched) when the caller already
+        has it loaded, to avoid re-querying it here.
         """
         from apps.enrollment.models import StudentProfile
 
-        try:
-            profile = student.student_profile
-        except StudentProfile.DoesNotExist:
-            return None
+        if profile is None:
+            try:
+                profile = student.student_profile
+            except StudentProfile.DoesNotExist:
+                return None
 
         level = profile.level
         program = profile.program

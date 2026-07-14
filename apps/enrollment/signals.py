@@ -7,8 +7,15 @@ from apps.enrollment.models import StudentProfile
 
 @receiver(post_save, sender=StudentProfile)
 def auto_enroll_core_courses(sender, instance, created, **kwargs):
-    """On new StudentProfile creation, enroll in all active CORE courses for the current term."""
-    if not created:
+    """
+    Enroll the student in all active CORE courses for the current term.
+
+    Fires on initial StudentProfile creation, and again whenever a program is
+    (re)assigned: StudentViewSet.assign_program sets the transient
+    `_enroll_core_courses` flag and saves instead of calling EnrollmentService
+    directly, so core enrollment always happens through this signal.
+    """
+    if not created and not getattr(instance, '_enroll_core_courses', False):
         return
 
     current_term = Term.objects.filter(is_current=True).first()

@@ -127,14 +127,17 @@ class StudentFee(models.Model):
         unique_together = [('student', 'term')]
 
     def save(self, *args, **kwargs):
-        # Recompute payment_status unless it's being set to OVERDUE explicitly
-        if self.payment_status != self.OVERDUE:
-            if self.amount_paid >= self.total_amount and self.total_amount > 0:
-                self.payment_status = self.FULLY_PAID
-            elif self.amount_paid > 0:
-                self.payment_status = self.PARTIALLY_PAID
-            else:
-                self.payment_status = self.NOT_PAID
+        # A full payment always resolves the fee, even one previously marked
+        # OVERDUE by term transition — otherwise a paid-off fee stays stuck
+        # as OVERDUE forever, since mark_overdue_fees() never revisits it.
+        if self.amount_paid >= self.total_amount and self.total_amount > 0:
+            self.payment_status = self.FULLY_PAID
+        elif self.payment_status == self.OVERDUE:
+            pass  # still overdue until fully paid, regardless of partial payments
+        elif self.amount_paid > 0:
+            self.payment_status = self.PARTIALLY_PAID
+        else:
+            self.payment_status = self.NOT_PAID
         super().save(*args, **kwargs)
 
     def __str__(self):

@@ -1,7 +1,8 @@
 from decimal import Decimal
 from django.core.exceptions import ImproperlyConfigured
 from django.core.exceptions import ValidationError as DjangoValidationError
-from django.db import transaction
+from django.db import IntegrityError, transaction
+from django.db.models import Exists, OuterRef
 from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
@@ -22,6 +23,15 @@ from apps.assessments.models import (
     Resource,
     TeacherEvaluation,
 )
+from apps.assessments.permissions import (
+    can_manage_assignment,
+    can_manage_quiz,
+    can_upload_resource,
+    can_view_assignment,
+    can_view_quiz,
+    can_view_resource,
+    is_enrolled,
+)
 from apps.assessments.serializers import (
     AssignmentListSerializer,
     AssignmentSerializer,
@@ -33,10 +43,11 @@ from apps.assessments.serializers import (
     QuizSubmitSerializer,
     ResourceSerializer,
     TeacherEvaluationSerializer,
+    StudentAssignmentListSerializer,
 )
 from apps.assessments.services import validate_resource_file
 from apps.enrollment.models import Enrollment
-from apps.users.permissions import IsAdminOrPrincipalOrTeacher, IsStudent
+from apps.users.permissions import IsAdminOrPrincipalOrTeacher, IsStudent, IsTeacherOrStudentOrSuperAdmin
 
 
 class UploadThrottle(UserRateThrottle):
@@ -89,29 +100,9 @@ class ResourceViewSet(viewsets.GenericViewSet):
         except TeacherCourseAssignment.DoesNotExist:
             raise NotFound('Assignment not found.')
 
-    def _can_view(self, user, assignment):
-        if user.has_any_role(['ADMIN', 'SUPER_ADMIN', 'PRINCIPAL']):
-            return True
-        if user.has_role('TEACHER') and assignment.teacher_id == user.pk:
-            return True
-        if user.has_role('STUDENT'):
-            return Enrollment.objects.filter(
-                student=user,
-                course=assignment.course,
-                term=assignment.term,
-                level=assignment.level,
-                is_active=True,
-            ).exists()
-        return False
-
-    def _can_upload(self, user, assignment):
-        if user.has_any_role(['ADMIN', 'SUPER_ADMIN']):
-            return True
-        return user.has_role('TEACHER') and assignment.teacher_id == user.pk
-
     def list(self, request, assignment_pk=None):
         assignment = self._get_assignment()
-        if not self._can_view(request.user, assignment):
+        if not can_view_resource(request.user, assignment):
             return _forbidden()
         qs = (
             Resource.objects
@@ -122,7 +113,7 @@ class ResourceViewSet(viewsets.GenericViewSet):
 
     def create(self, request, assignment_pk=None):
         assignment = self._get_assignment()
-        if not self._can_upload(request.user, assignment):
+        if not can_upload_resource(request.user, assignment):
             return _forbidden()
 
         serializer = self.get_serializer(data=request.data)
@@ -143,7 +134,7 @@ class ResourceViewSet(viewsets.GenericViewSet):
 
     def destroy(self, request, assignment_pk=None, pk=None):
         assignment = self._get_assignment()
-        if not self._can_upload(request.user, assignment):
+        if not can_upload_resource(request.user, assignment):
             return _forbidden()
         try:
             resource = Resource.objects.get(pk=pk, assignment=assignment)
@@ -164,38 +155,6 @@ class ResourceViewSet(viewsets.GenericViewSet):
         if getattr(self, 'action', None) == 'create':
             return [MultiPartParser(), FormParser()]
         return super().get_parsers()
-
-
-# ---------------------------------------------------------------------------
-# Quiz helpers
-# ---------------------------------------------------------------------------
-
-def _is_enrolled(user, assignment):
-    return Enrollment.objects.filter(
-        student=user,
-        course=assignment.course,
-        term=assignment.term,
-        level=assignment.level,
-        is_active=True,
-    ).exists()
-
-
-def _can_manage_quiz(user, quiz):
-    """Teacher owns assignment, or admin/super_admin."""
-    if user.has_any_role(['ADMIN', 'SUPER_ADMIN']):
-        return True
-    return user.has_role('TEACHER') and quiz.assignment.teacher_id == user.pk
-
-
-def _can_view_quiz(user, quiz):
-    """Admin/SuperAdmin/Principal always; teacher if own; student if enrolled and quiz OPEN."""
-    if user.has_any_role(['ADMIN', 'SUPER_ADMIN', 'PRINCIPAL']):
-        return True
-    if user.has_role('TEACHER') and quiz.assignment.teacher_id == user.pk:
-        return True
-    if user.has_role('STUDENT') and quiz.status == Quiz.OPEN:
-        return _is_enrolled(user, quiz.assignment)
-    return False
 
 
 def _grade_attempt(attempt):
@@ -254,7 +213,7 @@ class QuizViewSet(viewsets.GenericViewSet):
     def get_permissions(self):
         # list: Admin/Principal/SuperAdmin/Teacher only (queryset differs per role inside view)
         if self.action == 'list':
-            return [IsAdminOrPrincipalOrTeacher()]
+            return [IsTeacherOrStudentOrSuperAdmin()]
         # start_attempt: students only
         if self.action == 'start_attempt':
             return [IsStudent()]
@@ -278,7 +237,7 @@ class QuizViewSet(viewsets.GenericViewSet):
     # ------------------------------------------------------------------
     def list(self, request):
         user = request.user
-        if user.has_any_role(['ADMIN', 'SUPER_ADMIN', 'PRINCIPAL']):
+        if user.has_any_role('SUPER_ADMIN'):
             qs = Quiz.objects.select_related(
                 'assignment__teacher', 'assignment__course',
                 'assignment__term', 'assignment__level',
@@ -286,6 +245,26 @@ class QuizViewSet(viewsets.GenericViewSet):
         elif user.has_role('TEACHER'):
             qs = Quiz.objects.filter(
                 assignment__teacher=user,
+            ).select_related(
+                'assignment__teacher', 'assignment__course',
+                'assignment__term', 'assignment__level',
+            )
+        elif user.has_role('STUDENT'):
+            # Must match a single Enrollment row on course+term+level+student —
+            # three independent joins (one per field) would each be satisfiable
+            # by a *different* enrollment, leaking visibility into quizzes the
+            # student isn't actually enrolled in for that term/level.
+            matching_enrollment = Enrollment.objects.filter(
+                student=user,
+                course=OuterRef('assignment__course'),
+                term=OuterRef('assignment__term'),
+                level=OuterRef('assignment__level'),
+                is_active=True,
+            )
+            qs = Quiz.objects.filter(
+                Exists(matching_enrollment)
+            ).exclude(
+                status=Quiz.DRAFT
             ).select_related(
                 'assignment__teacher', 'assignment__course',
                 'assignment__term', 'assignment__level',
@@ -335,7 +314,7 @@ class QuizViewSet(viewsets.GenericViewSet):
     # ------------------------------------------------------------------
     def retrieve(self, request, pk=None):
         quiz = self._get_quiz(pk)
-        if not _can_view_quiz(request.user, quiz):
+        if not can_view_quiz(request.user, quiz):
             return _forbidden()
         return _ok(QuizSerializer(quiz).data)
 
@@ -344,7 +323,7 @@ class QuizViewSet(viewsets.GenericViewSet):
     # ------------------------------------------------------------------
     def partial_update(self, request, pk=None):
         quiz = self._get_quiz(pk)
-        if not _can_manage_quiz(request.user, quiz):
+        if not can_manage_quiz(request.user, quiz):
             return _forbidden()
         if quiz.status != Quiz.DRAFT:
             return _err(
@@ -363,7 +342,7 @@ class QuizViewSet(viewsets.GenericViewSet):
     @action(detail=True, methods=['post'], url_path='publish')
     def publish(self, request, pk=None):
         quiz = self._get_quiz(pk)
-        if not _can_manage_quiz(request.user, quiz):
+        if not can_manage_quiz(request.user, quiz):
             return _forbidden()
         if quiz.status != Quiz.DRAFT:
             return _err(
@@ -382,7 +361,7 @@ class QuizViewSet(viewsets.GenericViewSet):
         quiz = self._get_quiz(pk)
         user = request.user
 
-        if not _is_enrolled(user, quiz.assignment):
+        if not is_enrolled(user, quiz.assignment):
             return _forbidden('Not enrolled in this course.')
         if quiz.status != Quiz.OPEN:
             return _err(
@@ -396,6 +375,11 @@ class QuizViewSet(viewsets.GenericViewSet):
             )
 
         with transaction.atomic():
+            # Lock the quiz row so two concurrent start_attempt calls for the
+            # same student can't both pass the max_attempts check before either
+            # commits (previously caused an unhandled IntegrityError -> 500).
+            quiz = Quiz.objects.select_for_update().get(pk=quiz.pk)
+
             attempts_count = QuizAttempt.objects.filter(
                 quiz=quiz, student=user,
             ).exclude(status=QuizAttempt.IN_PROGRESS).count()
@@ -413,11 +397,18 @@ class QuizViewSet(viewsets.GenericViewSet):
             if in_progress:
                 return _ok(QuizAttemptSerializer(in_progress).data)
 
-            attempt = QuizAttempt.objects.create(
-                quiz=quiz,
-                student=user,
-                attempt_number=attempts_count + 1,
-            )
+            try:
+                with transaction.atomic():
+                    attempt = QuizAttempt.objects.create(
+                        quiz=quiz,
+                        student=user,
+                        attempt_number=attempts_count + 1,
+                    )
+            except IntegrityError:
+                return _err(
+                    'Attempt limit reached.',
+                    status_code=status.HTTP_409_CONFLICT,
+                )
 
         return _ok(
             QuizAttemptSerializer(attempt).data,
@@ -533,28 +524,6 @@ class QuizAttemptViewSet(viewsets.GenericViewSet):
         return _ok(QuizAttemptSerializer(attempt).data, 'Attempt submitted.')
 
 
-# ---------------------------------------------------------------------------
-# Assignment helpers
-# ---------------------------------------------------------------------------
-
-def _can_manage_assignment(user, course_assignment):
-    """Teacher owns assignment, or Super Admin."""
-    if user.has_role('SUPER_ADMIN'):
-        return True
-    return user.has_role('TEACHER') and course_assignment.teacher_id == user.pk
-
-
-def _can_view_assignment(user, course_assignment):
-    """Admin/SuperAdmin/Principal always; teacher if own; student if enrolled."""
-    if user.has_any_role(['ADMIN', 'SUPER_ADMIN', 'PRINCIPAL']):
-        return True
-    if user.has_role('TEACHER') and course_assignment.teacher_id == user.pk:
-        return True
-    if user.has_role('STUDENT'):
-        return _is_enrolled(user, course_assignment)
-    return False
-
-
 def _get_course_assignment(pk):
     try:
         return (
@@ -609,40 +578,65 @@ class CourseAssignmentViewSet(viewsets.GenericViewSet):
     # ------------------------------------------------------------------
     def list(self, request):
         user = request.user
-        if user.has_any_role(['ADMIN', 'SUPER_ADMIN', 'PRINCIPAL']):
+
+        if user.has_any_role(['SUPER_ADMIN']):
             qs = Assignment.objects.select_related(
-                'assignment__teacher', 'assignment__course',
-                'assignment__term', 'assignment__level',
+                'assignment__teacher',
+                'assignment__course',
+                'assignment__term',
+                'assignment__level',
             )
+
+            serializer_class = AssignmentListSerializer
+
         elif user.has_role('TEACHER'):
             qs = Assignment.objects.filter(
                 assignment__teacher=user,
             ).select_related(
-                'assignment__teacher', 'assignment__course',
-                'assignment__term', 'assignment__level',
+                'assignment__teacher',
+                'assignment__course',
+                'assignment__term',
+                'assignment__level',
             )
+
+            serializer_class = AssignmentListSerializer
+
         elif user.has_role('STUDENT'):
             enrolled_course_ids = Enrollment.objects.filter(
-                student=user, is_active=True,
+                student=user,
+                is_active=True,
             ).values_list('course_id', flat=True)
+
             qs = Assignment.objects.filter(
                 assignment__course_id__in=enrolled_course_ids,
                 status=Assignment.OPEN,
             ).select_related(
-                'assignment__teacher', 'assignment__course',
-                'assignment__term', 'assignment__level',
-            )
+                'assignment__teacher',
+                'assignment__course',
+                'assignment__term',
+                'assignment__level',
+            ).prefetch_related('submissions')
+
+            serializer_class = StudentAssignmentListSerializer
+
         else:
             return _forbidden()
 
         course = request.query_params.get('course')
         if course:
             qs = qs.filter(assignment__course_id=course)
+
         status_filter = request.query_params.get('status')
         if status_filter:
             qs = qs.filter(status=status_filter)
 
-        return _ok(AssignmentListSerializer(qs, many=True).data)
+        serializer = serializer_class(
+            qs,
+            many=True,
+            context={'request': request}
+        )
+
+        return _ok(serializer.data)
 
     # ------------------------------------------------------------------
     # Create
@@ -661,7 +655,7 @@ class CourseAssignmentViewSet(viewsets.GenericViewSet):
         except TeacherCourseAssignment.DoesNotExist:
             return _err('Assignment not found.', status_code=status.HTTP_404_NOT_FOUND)
 
-        if not _can_manage_assignment(user, course_assignment):
+        if not can_manage_assignment(user, course_assignment):
             return _forbidden()
 
         serializer = AssignmentSerializer(data=request.data)
@@ -678,7 +672,7 @@ class CourseAssignmentViewSet(viewsets.GenericViewSet):
     # ------------------------------------------------------------------
     def retrieve(self, request, pk=None):
         obj = self._get_assignment(pk)
-        if not _can_view_assignment(request.user, obj.assignment):
+        if not can_view_assignment(request.user, obj.assignment):
             return _forbidden()
         return _ok(AssignmentSerializer(obj).data)
 
@@ -687,7 +681,7 @@ class CourseAssignmentViewSet(viewsets.GenericViewSet):
     # ------------------------------------------------------------------
     def partial_update(self, request, pk=None):
         obj = self._get_assignment(pk)
-        if not _can_manage_assignment(request.user, obj.assignment):
+        if not can_manage_assignment(request.user, obj.assignment):
             return _forbidden()
         if obj.status != Assignment.DRAFT:
             return _err(
@@ -706,7 +700,7 @@ class CourseAssignmentViewSet(viewsets.GenericViewSet):
     @action(detail=True, methods=['post'], url_path='publish')
     def publish(self, request, pk=None):
         obj = self._get_assignment(pk)
-        if not _can_manage_assignment(request.user, obj.assignment):
+        if not can_manage_assignment(request.user, obj.assignment):
             return _forbidden()
         if obj.status != Assignment.DRAFT:
             return _err(
@@ -731,7 +725,7 @@ class CourseAssignmentViewSet(viewsets.GenericViewSet):
         obj = self._get_assignment(pk)
         user = request.user
 
-        if not _is_enrolled(user, obj.assignment):
+        if not is_enrolled(user, obj.assignment):
             return _forbidden('Not enrolled in this course.')
         if obj.status != Assignment.OPEN:
             return _err(

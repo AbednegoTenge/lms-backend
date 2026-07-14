@@ -6,6 +6,46 @@ from apps.academics.models import Course, Level, Program, Term
 from apps.users.models import CustomUser
 
 
+class SchoolClass(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=50)
+    level = models.ForeignKey(
+        Level,
+        on_delete=models.PROTECT,
+        related_name='school_classes',
+    )
+    program = models.ForeignKey(
+        Program,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='school_classes',
+    )
+    class_teacher = models.ForeignKey(
+        CustomUser,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='managed_classes',
+    )
+    capacity = models.PositiveIntegerField(null=True, blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'school_classes'
+        unique_together = [('name', 'level', 'program')]
+        ordering = ['level__number', 'name']
+        indexes = [
+            models.Index(fields=['level', 'program', 'is_active']),
+        ]
+
+    def __str__(self):
+        program = f' - {self.program.code}' if self.program else ''
+        return f'{self.name} ({self.level.name}{program})'
+
+
 class StudentProfile(models.Model):
     ACTIVE = 'ACTIVE'
     INACTIVE = 'INACTIVE'
@@ -33,6 +73,13 @@ class StudentProfile(models.Model):
     )
     program = models.ForeignKey(
         Program,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='student_profiles',
+    )
+    school_class = models.ForeignKey(
+        SchoolClass,
         on_delete=models.SET_NULL,
         null=True,
         blank=True,

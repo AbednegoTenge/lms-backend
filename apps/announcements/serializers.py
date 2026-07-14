@@ -14,7 +14,9 @@ class AnnouncementSerializer(serializers.ModelSerializer):
             'recipient_type', 'program', 'level', 'is_published',
             'published_at', 'created_at', 'is_read',
         ]
-        read_only_fields = ['id', 'created_by', 'published_at', 'created_at', 'is_read']
+        read_only_fields = [
+            'id', 'created_by', 'is_published', 'published_at', 'created_at', 'is_read',
+        ]
 
     def get_created_by_name(self, obj):
         return f'{obj.created_by.first_name} {obj.created_by.last_name}'.strip()

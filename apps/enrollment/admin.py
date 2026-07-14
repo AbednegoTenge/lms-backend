@@ -1,22 +1,44 @@
 from django.contrib import admin
 
-from apps.enrollment.models import Enrollment, StudentProfile
+from apps.enrollment.models import Enrollment, SchoolClass, StudentProfile
+
+
+@admin.register(SchoolClass)
+class SchoolClassAdmin(admin.ModelAdmin):
+    list_display = ('name', 'level', 'program', 'class_teacher', 'capacity', 'student_count', 'is_active')
+    list_filter = ('is_active', 'level', 'program')
+    search_fields = (
+        'name',
+        'level__name',
+        'program__name',
+        'program__code',
+        'class_teacher__school_id',
+        'class_teacher__first_name',
+        'class_teacher__last_name',
+    )
+    autocomplete_fields = ('level', 'program', 'class_teacher')
+    list_select_related = ('level', 'program', 'class_teacher')
+
+    @admin.display(description='Students')
+    def student_count(self, obj):
+        return obj.student_profiles.count()
 
 
 @admin.register(StudentProfile)
 class StudentProfileAdmin(admin.ModelAdmin):
-    list_display = ('user', 'level', 'program', 'class_section', 'status', 'enrolled_date')
-    list_filter = ('status', 'level', 'program', 'class_section', 'enrolled_date')
+    list_display = ('user', 'level', 'program', 'school_class', 'class_section', 'status', 'enrolled_date')
+    list_filter = ('status', 'level', 'program', 'school_class', 'class_section', 'enrolled_date')
     search_fields = (
         'user__school_id',
         'user__first_name',
         'user__last_name',
         'program__name',
         'program__code',
+        'school_class__name',
         'class_section',
     )
-    autocomplete_fields = ('user', 'level', 'program')
-    list_select_related = ('user', 'level', 'program')
+    autocomplete_fields = ('user', 'level', 'program', 'school_class')
+    list_select_related = ('user', 'level', 'program', 'school_class')
     date_hierarchy = 'enrolled_date'
 
 

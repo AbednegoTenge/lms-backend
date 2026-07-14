@@ -12,6 +12,18 @@ ROLE_PREFIX = {
     Role.SUPER_ADMIN: 'SA',
 }
 
+# Maps role name -> roles allowed to create a user with that role as primary.
+# Mirrors docs/permissions.md "User Management" matrix. Enforced here (not just
+# at the view layer) so any future caller of create_user is covered too.
+ROLE_CREATION_PERMISSIONS = {
+    Role.STUDENT: {'ADMIN', 'SUPER_ADMIN'},
+    Role.TEACHER: {'ADMIN', 'SUPER_ADMIN'},
+    Role.PRINCIPAL: {'ADMIN', 'SUPER_ADMIN'},
+    Role.ADMIN: {'SUPER_ADMIN'},
+    Role.IT_SUPPORT: {'SUPER_ADMIN'},
+    Role.SUPER_ADMIN: {'SUPER_ADMIN'},
+}
+
 
 def generate_school_id(primary_role: str) -> str:
     """Return next available school_id for the given role prefix.
@@ -57,6 +69,11 @@ class UserService:
         primary_role = roles[0]
         if primary_role not in ROLE_PREFIX:
             raise ValueError(f'Unknown role: {primary_role}')
+
+        if created_by is not None:
+            allowed_creators = ROLE_CREATION_PERMISSIONS.get(primary_role, set())
+            if not created_by.has_any_role(list(allowed_creators)):
+                raise ValueError(f'Not authorized to create a user with role {primary_role}.')
 
         school_id = generate_school_id(primary_role)
 

@@ -57,6 +57,14 @@ class TermSerializer(serializers.ModelSerializer):
         end = attrs.get('end_date') or (self.instance.end_date if self.instance else None)
         if start and end and start >= end:
             raise serializers.ValidationError('start_date must be before end_date.')
+
+        # is_current may be set freely on create (bootstrapping the first term),
+        # but on an existing term it must only change via POST /terms/transition/,
+        # which also handles promotion/graduation/fee side effects.
+        if self.instance is not None and 'is_current' in attrs:
+            raise serializers.ValidationError({
+                'is_current': 'Cannot be changed directly — use POST /terms/transition/.'
+            })
         return attrs
 
 
@@ -186,10 +194,7 @@ class CourseOutlineSerializer(serializers.ModelSerializer):
         return value
 
     def update(self, instance, validated_data):
+        from apps.academics.services import CourseOutlineService
+
         topics_data = validated_data.pop('weekly_topics', [])
-        # Replace all weekly topics atomically
-        instance.weekly_topics.all().delete()
-        for topic in topics_data:
-            WeeklyTopic.objects.create(outline=instance, **topic)
-        instance.save()
-        return instance
+        return CourseOutlineService.replace_weekly_topics(instance, topics_data)

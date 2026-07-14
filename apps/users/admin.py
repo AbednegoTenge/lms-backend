@@ -2,21 +2,40 @@ from django import forms
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 from django.contrib.auth.forms import ReadOnlyPasswordHashField
+from django.db import transaction
 
 from apps.academics.models import TeacherCourseAssignment
-from apps.enrollment.models import Enrollment, StudentProfile
+from apps.enrollment.models import Enrollment, SchoolClass, StudentProfile
 from apps.fees.models import StudentFee
 from apps.users.models import AuditLog, CustomUser, Role, SchoolIDCounter, UserRole
+from apps.users.services import generate_school_id
 
 
 class CustomUserCreationForm(forms.ModelForm):
+    primary_role = forms.ChoiceField(label='Primary role', choices=Role.ROLE_CHOICES)
     password1 = forms.CharField(label='Password', widget=forms.PasswordInput)
     password2 = forms.CharField(label='Password confirmation', widget=forms.PasswordInput)
+    student_level = forms.ModelChoiceField(
+        label='Student level',
+        queryset=StudentProfile._meta.get_field('level').remote_field.model.objects.all(),
+        required=False,
+    )
+    student_program = forms.ModelChoiceField(
+        label='Student program',
+        queryset=StudentProfile._meta.get_field('program').remote_field.model.objects.all(),
+        required=False,
+    )
+    student_class = forms.ModelChoiceField(
+        label='Student class',
+        queryset=SchoolClass.objects.filter(is_active=True),
+        required=False,
+    )
+    class_section = forms.CharField(required=False)
+    enrolled_date = forms.DateField(required=False, widget=forms.DateInput(attrs={'type': 'date'}))
 
     class Meta:
         model = CustomUser
         fields = (
-            'school_id',
             'email',
             'first_name',
             'last_name',
@@ -34,9 +53,35 @@ class CustomUserCreationForm(forms.ModelForm):
             raise forms.ValidationError('Passwords do not match.')
         return password2
 
+    def clean(self):
+        cleaned_data = super().clean()
+        primary_role = cleaned_data.get('primary_role')
+        student_level = cleaned_data.get('student_level')
+        student_program = cleaned_data.get('student_program')
+        student_class = cleaned_data.get('student_class')
+
+        if primary_role == Role.STUDENT:
+            if not student_level:
+                self.add_error('student_level', 'Student level is required for student users.')
+            if not cleaned_data.get('enrolled_date'):
+                self.add_error('enrolled_date', 'Enrolled date is required for student users.')
+
+            if student_class and student_level and student_class.level_id != student_level.id:
+                self.add_error('student_class', 'Class level must match the student level.')
+            if (
+                student_class
+                and student_program
+                and student_class.program_id
+                and student_class.program_id != student_program.id
+            ):
+                self.add_error('student_class', 'Class program must match the student program.')
+
+        return cleaned_data
+
     def save(self, commit=True):
         user = super().save(commit=False)
         user.set_password(self.cleaned_data['password1'])
+        user.must_change_password = True
         if commit:
             user.save()
         return user
@@ -60,7 +105,7 @@ class UserRoleInline(admin.TabularInline):
 
 class StudentProfileInline(admin.StackedInline):
     model = StudentProfile
-    autocomplete_fields = ('level', 'program')
+    autocomplete_fields = ('level', 'program', 'school_class')
     extra = 0
     max_num = 1
 
@@ -138,11 +183,16 @@ class CustomUserAdmin(UserAdmin):
         (None, {
             'classes': ('wide',),
             'fields': (
-                'school_id',
+                'primary_role',
                 'first_name',
                 'last_name',
                 'email',
                 'phone',
+                'student_level',
+                'student_program',
+                'student_class',
+                'class_section',
+                'enrolled_date',
                 'password1',
                 'password2',
                 'is_active',
@@ -155,6 +205,28 @@ class CustomUserAdmin(UserAdmin):
 
     def get_queryset(self, request):
         return super().get_queryset(request).prefetch_related('userrole_set__role')
+
+    def save_model(self, request, obj, form, change):
+        if change:
+            super().save_model(request, obj, form, change)
+            return
+
+        primary_role = form.cleaned_data['primary_role']
+        with transaction.atomic():
+            obj.school_id = generate_school_id(primary_role)
+            obj.save()
+            role = Role.objects.get(name=primary_role)
+            UserRole.objects.create(user=obj, role=role, assigned_by=request.user)
+            if primary_role == Role.STUDENT:
+                StudentProfile.objects.create(
+                    user=obj,
+                    level=form.cleaned_data['student_level'],
+                    program=form.cleaned_data.get('student_program'),
+                    school_class=form.cleaned_data.get('student_class'),
+                    class_section=form.cleaned_data.get('class_section'),
+                    enrolled_date=form.cleaned_data['enrolled_date'],
+                    status=StudentProfile.ACTIVE,
+                )
 
     @admin.display(description='Full name', ordering='first_name')
     def full_name(self, obj):

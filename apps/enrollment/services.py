@@ -46,6 +46,12 @@ class EnrollmentService:
         if len(course_ids) != 4:
             raise ValueError(f'Exactly 4 elective courses required; got {len(course_ids)}.')
 
+        existing_electives = Enrollment.objects.filter(
+            student=student, term=term, enrollment_type=Enrollment.ELECTIVE, is_active=True,
+        ).count()
+        if existing_electives > 0:
+            raise ValueError('Student already has elective enrollments for this term.')
+
         courses = list(
             Course.objects.filter(
                 id__in=course_ids,

@@ -16,6 +16,7 @@ from apps.academics.models import (
     TeacherCourseAssignment,
     Term,
 )
+from apps.academics.permissions import CanEditCourseOutline, CanViewCourseOutline
 from apps.academics.serializers import (
     AcademicYearSerializer,
     CourseOutlineSerializer,
@@ -422,6 +423,11 @@ class CourseOutlineViewSet(viewsets.GenericViewSet):
     """
     serializer_class = CourseOutlineSerializer
 
+    def get_permissions(self):
+        if self.action == 'update':
+            return [CanEditCourseOutline()]
+        return [CanViewCourseOutline()]
+
     def _get_outline_or_404(self, assignment_pk):
         from rest_framework.exceptions import NotFound
         try:
@@ -436,27 +442,12 @@ class CourseOutlineViewSet(viewsets.GenericViewSet):
 
     def retrieve(self, request, assignment_pk=None):
         outline = self._get_outline_or_404(assignment_pk)
-        user = request.user
-        allowed = user.has_any_role(['ADMIN', 'SUPER_ADMIN', 'PRINCIPAL'])
-        is_teacher_owner = user.has_role('TEACHER') and outline.assignment.teacher == user
-        is_student = user.has_role('STUDENT')
-        if not (allowed or is_teacher_owner or is_student):
-            return Response(
-                {'success': False, 'message': 'Permission denied.', 'data': None},
-                status=status.HTTP_403_FORBIDDEN,
-            )
+        self.check_object_permissions(request, outline)
         return _ok(self.get_serializer(outline).data)
 
     def update(self, request, assignment_pk=None):
         outline = self._get_outline_or_404(assignment_pk)
-        user = request.user
-        is_owner = user.has_role('TEACHER') and outline.assignment.teacher == user
-        is_admin = user.has_any_role(['ADMIN', 'SUPER_ADMIN'])
-        if not (is_owner or is_admin):
-            return Response(
-                {'success': False, 'message': 'Permission denied.', 'data': None},
-                status=status.HTTP_403_FORBIDDEN,
-            )
+        self.check_object_permissions(request, outline)
         serializer = self.get_serializer(outline, data=request.data, partial=False)
         if not serializer.is_valid():
             return _err('Validation error.', serializer.errors)

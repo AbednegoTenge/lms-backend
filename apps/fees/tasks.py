@@ -33,10 +33,14 @@ def generate_term_fees():
     if current_term is None:
         return 0
 
-    profiles = StudentProfile.objects.filter(status=StudentProfile.ACTIVE).select_related('user')
+    profiles = (
+        StudentProfile.objects
+        .filter(status=StudentProfile.ACTIVE)
+        .select_related('user', 'level', 'program')
+    )
     count = 0
     for profile in profiles:
-        result = FeeCalculationService.calculate_for_student(profile.user, current_term)
+        result = FeeCalculationService.calculate_for_student(profile.user, current_term, profile=profile)
         if result is not None:
             count += 1
     return count

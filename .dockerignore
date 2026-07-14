@@ -1,0 +1,11 @@
+system-design.md
+task-workflow.md
+claude.md
+claude-skill.md
+agents.md
+docs/
+resources/
+.venv/
+.git/
+tests/
+.env/

@@ -7,9 +7,9 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from apps.announcements.models import Announcement, AnnouncementRecipient
+from apps.announcements.permissions import CanCreateAnnouncement, IsCreatorOfAnnouncement
 from apps.announcements.serializers import AnnouncementSerializer
 from apps.announcements.tasks import fan_out_announcement
-from apps.users.permissions import IsAdminOrSuperAdmin
 
 
 def _ok(data, message='', status_code=status.HTTP_200_OK):
@@ -29,9 +29,9 @@ class AnnouncementViewSet(viewsets.GenericViewSet):
 
     def get_permissions(self):
         if self.action == 'create':
-            return [_CanCreateAnnouncement()]
+            return [CanCreateAnnouncement()]
         if self.action in ('partial_update', 'destroy', 'publish'):
-            return [_IsCreatorOfAnnouncement()]
+            return [IsCreatorOfAnnouncement()]
         return [IsAuthenticated()]
 
     def get_queryset(self):
@@ -127,27 +127,3 @@ class AnnouncementViewSet(viewsets.GenericViewSet):
             recipient.read_at = timezone.now()
             recipient.save(update_fields=['is_read', 'read_at'])
         return _ok({'is_read': True, 'read_at': recipient.read_at})
-
-
-# ---------------------------------------------------------------------------
-# Permission helpers (inline — only used by AnnouncementViewSet)
-# ---------------------------------------------------------------------------
-
-from rest_framework.permissions import BasePermission  # noqa: E402
-
-
-class _CanCreateAnnouncement(BasePermission):
-    def has_permission(self, request, view):
-        return request.user.is_authenticated and request.user.has_any_role(
-            ['ADMIN', 'PRINCIPAL', 'IT_SUPPORT', 'SUPER_ADMIN']
-        )
-
-
-class _IsCreatorOfAnnouncement(BasePermission):
-    """View-level: authenticated. Object-level: must be creator."""
-
-    def has_permission(self, request, view):
-        return request.user.is_authenticated
-
-    def has_object_permission(self, request, view, obj):
-        return str(obj.created_by_id) == str(request.user.pk)

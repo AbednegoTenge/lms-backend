@@ -168,68 +168,179 @@ class QuizAttemptSerializer(serializers.ModelSerializer):
 # ---------------------------------------------------------------------------
 # Assignment serializers
 # ---------------------------------------------------------------------------
-
-class AssignmentSerializer(serializers.ModelSerializer):
-    assignment_id = serializers.UUIDField(source='assignment.id', read_only=True)
-    course_name = serializers.CharField(source='assignment.course.name', read_only=True)
-
-    class Meta:
-        model = Assignment
-        fields = [
-            'id', 'assignment_id', 'course_name', 'title', 'description',
-            'due_datetime', 'submission_type', 'max_marks', 'status', 'created_at',
-        ]
-        read_only_fields = ['id', 'assignment_id', 'course_name', 'status', 'created_at']
-
-
-class AssignmentListSerializer(serializers.ModelSerializer):
-    assignment_id = serializers.UUIDField(source='assignment.id', read_only=True)
-    course_name = serializers.CharField(source='assignment.course.name', read_only=True)
+class BaseAssignmentSerializer(serializers.ModelSerializer):
+    assignment_id = serializers.UUIDField(
+        source='assignment.id',
+        read_only=True
+    )
+    course_name = serializers.CharField(
+        source='assignment.course.name',
+        read_only=True
+    )
 
     class Meta:
         model = Assignment
+        fields = []
+        read_only_fields = []
+
+
+class AssignmentSerializer(BaseAssignmentSerializer):
+    class Meta(BaseAssignmentSerializer.Meta):
         fields = [
-            'id', 'assignment_id', 'course_name', 'title',
-            'due_datetime', 'submission_type', 'max_marks', 'status', 'created_at',
+            'id',
+            'assignment_id',
+            'course_name',
+            'title',
+            'description',
+            'due_datetime',
+            'submission_type',
+            'max_marks',
+            'status',
+            'created_at',
         ]
-        read_only_fields = ['id', 'assignment_id', 'course_name', 'status', 'created_at']
+
+        read_only_fields = [
+            'id',
+            'assignment_id',
+            'course_name',
+            'status',
+            'created_at',
+        ]
+
+
+class AssignmentListSerializer(BaseAssignmentSerializer):
+    class Meta(BaseAssignmentSerializer.Meta):
+        fields = [
+            'id',
+            'assignment_id',
+            'course_name',
+            'title',
+            'due_datetime',
+            'submission_type',
+            'max_marks',
+            'status',
+            'created_at',
+        ]
+
+        read_only_fields = [
+            'id',
+            'assignment_id',
+            'course_name',
+            'status',
+            'created_at',
+        ]
 
 
 class AssignmentSubmissionSerializer(serializers.ModelSerializer):
-    student_school_id = serializers.CharField(source='student.school_id', read_only=True)
+    student_school_id = serializers.CharField(
+        source='student.school_id',
+        read_only=True
+    )
+
     graded_by_name = serializers.SerializerMethodField()
 
     class Meta:
         model = AssignmentSubmission
         fields = [
-            'id', 'assignment', 'student_school_id', 'submitted_at',
-            'text_content', 'file', 'marks_obtained', 'feedback',
-            'graded_by_name', 'graded_at', 'status',
+            'id',
+            'assignment',
+            'student_school_id',
+            'submitted_at',
+            'text_content',
+            'file',
+            'marks_obtained',
+            'feedback',
+            'graded_by_name',
+            'graded_at',
+            'status',
         ]
+
         read_only_fields = [
-            'id', 'assignment', 'student_school_id', 'submitted_at',
-            'marks_obtained', 'feedback', 'graded_by_name', 'graded_at', 'status',
+            'id',
+            'assignment',
+            'student_school_id',
+            'submitted_at',
+            'marks_obtained',
+            'feedback',
+            'graded_by_name',
+            'graded_at',
+            'status',
         ]
+
         extra_kwargs = {
-            'file': {'write_only': True, 'required': False},
-            'text_content': {'required': False},
+            'file': {
+                'write_only': True,
+                'required': False,
+            },
+            'text_content': {
+                'required': False,
+            },
         }
 
     def get_graded_by_name(self, obj):
-        if obj.graded_by:
-            return obj.graded_by.get_full_name()
-        return None
+        return (
+            obj.graded_by.get_full_name()
+            if obj.graded_by
+            else None
+        )
 
+
+class StudentAssignmentListSerializer(BaseAssignmentSerializer):
+    score = serializers.SerializerMethodField()
+    submission_status = serializers.SerializerMethodField()
+
+    class Meta(BaseAssignmentSerializer.Meta):
+        fields = [
+            'id',
+            'assignment_id',
+            'course_name',
+            'title',
+            'due_datetime',
+            'max_marks',
+            'status',
+            'score',
+            'submission_status',
+        ]
+
+    def _get_submission(self, obj):
+        if not hasattr(self, '_submission_cache'):
+            self._submission_cache = {}
+
+        if obj.id not in self._submission_cache:
+            self._submission_cache[obj.id] = next(
+                (s for s in obj.submissions.all()
+                if s.student_id == self.context['request'].user.id),
+                None
+            )
+
+        return self._submission_cache[obj.id]
+
+    def get_score(self, obj):
+        submission = self._get_submission(obj)
+        return submission.marks_obtained if submission else None
+
+    def get_submission_status(self, obj):
+        submission = self._get_submission(obj)
+        return submission.status if submission else None
 
 class GradeSubmissionSerializer(serializers.Serializer):
-    marks_obtained = serializers.DecimalField(max_digits=6, decimal_places=2)
-    feedback = serializers.CharField(required=False, allow_blank=True)
+    marks_obtained = serializers.DecimalField(
+        max_digits=6,
+        decimal_places=2
+    )
+
+    feedback = serializers.CharField(
+        required=False,
+        allow_blank=True
+    )
 
     def validate_marks_obtained(self, value):
         if value < 0:
-            raise serializers.ValidationError('marks_obtained cannot be negative.')
-        return value
+            raise serializers.ValidationError(
+                'marks_obtained cannot be negative.'
+            )
 
+        return value
 
 # ---------------------------------------------------------------------------
 # Teacher Evaluation serializers
